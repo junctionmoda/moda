@@ -307,7 +307,11 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                 Log.i(TAG, "imu %.2f %.2f %.2f".format(accel.x, accel.y, accel.z))
                 _status.update { it.copy(rawAccel = "%.1f, %.1f, %.1f".format(accel.x, accel.y, accel.z)) }
               }
-              Posture.elevationDegrees(accel.x.toDouble(), accel.y.toDouble(), accel.z.toDouble())
+              // Measured on a real Ray-Ban Meta Gen 2 (2026-11-14): pitch lives in the X–Z plane
+              // (Y ≈ 0). Level gaze read (-9.5, 0.5, -2.4), looking down at a desk (-6.3, -0.4, -7.5),
+              // so the camera's forward axis is +Z here, the opposite of the phone's -Z: negate z.
+              // Gives ≈ -14° level (natural tilt on the face) and ≈ -50° at the desk.
+              Posture.elevationDegrees(accel.x.toDouble(), accel.y.toDouble(), -accel.z.toDouble())
                   ?.let { _pitch.tryEmit(PitchSample(it, fromGlasses = true)) }
             }
           }

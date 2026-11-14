@@ -37,4 +37,4 @@ See [TESTING.md](TESTING.md) for the full test checklist (Chinese).
 
 ## Known open issues
 
-- **Posture axis**: on a real Ray-Ban Meta Gen 2 the head pitch shows up in the IMU's X–Z plane (Y ≈ 0). `glasses/Posture.kt` still assumes forward = −Z and needs recalibrating.
+- **Posture axis** (measured on a real Ray-Ban Meta Gen 2): head pitch lives in the IMU's X–Z plane (Y ≈ 0) and the forward axis is +Z, so `GlassesLink` negates z before `Posture.elevationDegrees`. Level gaze ≈ -14°, looking down at a desk ≈ -50°. The posture baseline is calibrated in the first 5 s of a session, so start the session in your normal working posture: looking from a screen down to a desk is a 36° drop, more than the 20° default threshold.
