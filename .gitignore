@@ -1,0 +1,16 @@
+# Gradle / build
+.gradle/
+.kotlin/
+build/
+app/build/
+captures/
+*.apk
+*.aab
+
+# Machine-local (SDK path, optional DAT credentials)
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
