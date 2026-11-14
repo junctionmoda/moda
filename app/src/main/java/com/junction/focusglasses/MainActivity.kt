@@ -385,6 +385,10 @@ private fun CookingSection(graph: AppGraph, cooking: CookingUi, link: LinkStatus
         fontWeight = FontWeight.SemiBold,
     )
     Text(cooking.advice, color = Muted)
+    LabeledSwitch("Live kitchen assistant (needs Focus Live)", graph.settings.current.cookingLive) { enabled ->
+      graph.settings.update { it.copy(cookingLive = enabled) }
+    }
+    Text(if (graph.settings.current.cookingLive) "Live will be used when connected; otherwise this falls back to one-frame analysis." else "One-frame analysis is the default for a more predictable demo.", color = Muted, fontSize = 12.sp)
     cooking.timerRemainingSec?.let { Text("Timer %02d:%02d".format(it / 60, it % 60), fontSize = 28.sp) }
     if (link.phase != LinkPhase.STREAMING) Text("Connect glasses and grant camera access before analyzing a view.", color = Warn, fontSize = 12.sp)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

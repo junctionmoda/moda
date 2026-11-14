@@ -96,7 +96,7 @@ class CookingEngine(
     if (_ui.value.analyzing) return
     val currentSettings = settings.current
     val snapshot = link.colorSnapshot()
-    if (live.isReady && snapshot != null) {
+    if (useLive && snapshot != null) {
       // Focus Live sees the color frame and answers out loud; no separate request needed.
       live.image(snapshot)
       live.event("cooking_look: the user wants an idea from this view. Name the visible ingredients and give one short meal idea.")
@@ -139,8 +139,10 @@ class CookingEngine(
   private var timerMinutes = 10
 
   private fun speak(event: String, fallback: String) {
-    if (live.isReady) live.event(event) else voice.say(fallback)
+    if (useLive) live.event(event) else voice.say(fallback)
   }
+
+  private val useLive: Boolean get() = settings.current.cookingLive && live.isReady
 
   private fun runTimer(initialSeconds: Int) {
     timerJob?.cancel()
