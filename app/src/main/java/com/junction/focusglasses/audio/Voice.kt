@@ -143,6 +143,15 @@ class Voice(context: Context, private val ambient: AmbientPlayer) {
     speakNow(text)
   }
 
+  /** Gives the wearer the floor immediately (for example when glasses Speech sees a partial). */
+  @Synchronized
+  fun interrupt() {
+    pending.clear()
+    if (ready) tts.stop()
+    ambient.setDucked(false)
+    _speaking.value = false
+  }
+
   private fun speakNow(text: String) {
     tts.speak(text, TextToSpeech.QUEUE_ADD, null, "u${ids.incrementAndGet()}")
   }

@@ -12,13 +12,13 @@ English UI and voice. This is a multi-mode Ray-Ban Meta companion; Work is the m
 |---|---|
 | Glasses link | Meta DAT registration, camera stream, IMU, MockDeviceKit test mode, experimental touch and Speech input |
 | Mode control | Work, Cooking and Meeting lifecycle; start, pause, resume, end and switch modes |
-| Work Mode | Focus timer, calm music, DND, phone/distraction nudges, distance/posture reminders, check-in, focus tree and local stats |
-| Cooking Mode | User-triggered fridge prompt, one-frame optional Gemini suggestion, 10-minute timer and an inexact local dishes reminder |
+| Work Mode | Focus timer, calm music, DND, temporally-smoothed phone/distraction nudges, distance/posture reminders, check-in, focus tree and local stats |
+| Cooking Mode | Manual fridge prompt, one-frame Gemini suggestion, optional scene-change-gated proactive vision, timer and local dishes reminder |
 | Meeting Mode | Reads the next local Android Calendar event, meeting start/delay/skip check-in, recording-consent prompt and local action items |
 
 ## Honest demo boundaries
 
-- Cooking does **not** automatically recognise a fridge, flame, burnt food or food safety. The fridge cue is manual; Gemini analysis sends one frame only after a user action and needs a configured API key.
+- Cooking does **not** automatically recognise a fridge, flame, burnt food or food safety. The fridge cue is manual. Its opt-in proactive vision sends an occasional changed camera scene to Gemini (at most once per 45 seconds) and needs a configured API key; it stays off by default.
 - Meeting Mode records consent and local notes. It does **not** continuously record or transcribe a meeting yet, and the calendar check is not a background all-day alarm.
 - Glasses Inputs and Speech are experimental DAT capabilities and require developer approval plus real-device validation. Phone controls and MockDeviceKit validate the app flow, not hardware behaviour.
 

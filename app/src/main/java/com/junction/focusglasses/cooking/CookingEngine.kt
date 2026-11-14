@@ -1,6 +1,8 @@
 package com.junction.focusglasses.cooking
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.os.SystemClock
 import android.util.Log
 import com.junction.focusglasses.ai.FocusLive
 import com.junction.focusglasses.ai.GeminiClient
@@ -29,9 +31,9 @@ data class CookingUi(
 )
 
 /**
- * A deliberately cautious Cooking Mode. It can show the existing glasses camera feed and submit
- * one user-requested frame to the optional Gemini setting; it does not claim to detect a fridge,
- * flame, or food safety state automatically.
+ * A deliberately cautious Cooking Mode. In addition to a manual look command, it can make
+ * infrequent, opt-in scene-change-gated camera checks. Gemini may suggest a next step, but is
+ * never treated as a food-safety, fire, or burn detector.
  */
 class CookingEngine(
     private val context: Context,
@@ -41,17 +43,34 @@ class CookingEngine(
     private val voice: Voice,
     private val live: FocusLive,
 ) {
-  private companion object { const val TAG = "FocusGlasses:Cooking" }
+  private companion object {
+    const val TAG = "FocusGlasses:Cooking"
+    private const val PROACTIVE_WARMUP_MS = 8_000L
+    private const val PROACTIVE_INTERVAL_MS = 45_000L
+    private const val SCENE_CHANGE_THRESHOLD = 18
+  }
 
   private val _ui = MutableStateFlow(CookingUi())
   val ui: StateFlow<CookingUi> = _ui.asStateFlow()
   private var timerJob: Job? = null
   private var pausedPhase: CookingPhase? = null
+  private var modeStartedAt = 0L
+  private var lastProactiveAt = 0L
+  private var lastScene: IntArray? = null
+
+  init {
+    scope.launch {
+      link.frames.collect { frame -> maybeInspectChangedScene(frame) }
+    }
+  }
 
   fun start() {
     if (_ui.value.phase == CookingPhase.PAUSED) { resume(); return }
     if (_ui.value.phase != CookingPhase.IDLE) return
-    _ui.value = CookingUi(phase = CookingPhase.PLANNING, advice = "Cooking Mode ready. Open the fridge, then ask for a current-view suggestion.")
+    modeStartedAt = SystemClock.elapsedRealtime()
+    lastProactiveAt = 0L
+    lastScene = null
+    _ui.value = CookingUi(phase = CookingPhase.PLANNING, advice = if (settings.current.cookingProactiveVision) "Cooking Mode is watching for meaningful scene changes. It will offer occasional camera-based suggestions." else "Cooking Mode ready. Ask for a current-view suggestion, or enable proactive camera prompts.")
     speak(
         "cooking_started: Cooking mode is on. Offer hands-free timers and ideas from what they see. One sentence.",
         "Cooking mode is on. Say what can I cook, or set a ten minute timer.",
@@ -78,6 +97,7 @@ class CookingEngine(
     timerJob?.cancel()
     timerJob = null
     pausedPhase = null
+    lastScene = null
     _ui.update { it.copy(phase = CookingPhase.IDLE, timerRemainingSec = null, analyzing = false) }
   }
 
@@ -122,6 +142,55 @@ class CookingEngine(
       voice.say(suggestion ?: "Sorry, I couldn't get a suggestion. Try again with a clearer view.")
     }
   }
+
+  /** Only requests vision after a meaningful low-resolution scene change and a long cooldown. */
+  private fun maybeInspectChangedScene(frame: Bitmap) {
+    val phase = _ui.value.phase
+    if (!settings.current.cookingProactiveVision || (phase != CookingPhase.PLANNING && phase != CookingPhase.COOKING) || _ui.value.analyzing) return
+    val now = SystemClock.elapsedRealtime()
+    if (now - modeStartedAt < PROACTIVE_WARMUP_MS || now - lastProactiveAt < PROACTIVE_INTERVAL_MS) return
+    val signature = sceneSignature(frame)
+    val previous = lastScene
+    if (previous != null && sceneDifference(previous, signature) < SCENE_CHANGE_THRESHOLD) return
+    lastScene = signature
+    lastProactiveAt = now
+    inspectSceneProactively()
+  }
+
+  private fun inspectSceneProactively() {
+    val currentSettings = settings.current
+    if (currentSettings.geminiKey.isBlank()) {
+      _ui.update { it.copy(advice = "Proactive camera prompts need a Gemini API key. No frame was sent.") }
+      return
+    }
+    val snapshot = link.colorSnapshot() ?: return
+    _ui.update { it.copy(analyzing = true, advice = "Checking a changed kitchen scene…") }
+    scope.launch {
+      val suggestion = GeminiClient.describeCookingScene(snapshot, currentSettings.geminiKey, currentSettings.geminiModel)
+      val useful = suggestion?.takeUnless { it.equals("NO_ACTION", ignoreCase = true) }
+      _ui.update { current ->
+        current.copy(analyzing = false, advice = useful ?: "No useful camera prompt for this scene; staying quiet.")
+      }
+      if (useful != null) {
+        Log.i(TAG, "proactive scene suggestion: $useful")
+        speak("cooking_camera_observation: $useful Speak only this short, cautious suggestion.", useful)
+      }
+    }
+  }
+
+  /** 8×8 luma signature: a cheap local gate, not a claim to recognize kitchen objects. */
+  private fun sceneSignature(bitmap: Bitmap): IntArray {
+    val values = IntArray(64)
+    var i = 0
+    for (y in 0 until 8) for (x in 0 until 8) {
+      val color = bitmap.getPixel((x + 1) * bitmap.width / 9, (y + 1) * bitmap.height / 9)
+      values[i++] = (android.graphics.Color.red(color) * 30 + android.graphics.Color.green(color) * 59 + android.graphics.Color.blue(color) * 11) / 100
+    }
+    return values
+  }
+
+  private fun sceneDifference(before: IntArray, after: IntArray): Int =
+      before.indices.sumOf { kotlin.math.abs(before[it] - after[it]) } / before.size
 
   fun startTenMinuteTimer() = startTimer(10)
 

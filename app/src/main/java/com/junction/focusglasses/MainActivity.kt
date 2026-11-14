@@ -389,6 +389,10 @@ private fun CookingSection(graph: AppGraph, cooking: CookingUi, link: LinkStatus
       graph.settings.update { it.copy(cookingLive = enabled) }
     }
     Text(if (graph.settings.current.cookingLive) "Live will be used when connected; otherwise this falls back to one-frame analysis." else "One-frame analysis is the default for a more predictable demo.", color = Muted, fontSize = 12.sp)
+    LabeledSwitch("Proactive camera prompts (sends occasional changed scenes to Gemini)", graph.settings.current.cookingProactiveVision) { enabled ->
+      graph.settings.update { it.copy(cookingProactiveVision = enabled) }
+    }
+    Text(if (graph.settings.current.cookingProactiveVision) "After an 8-second warm-up, only meaningful scene changes can trigger a Gemini check (at most once every 45 seconds)." else "Off by default: enable it to let Cooking Mode offer scene-based suggestions without a question.", color = Muted, fontSize = 12.sp)
     cooking.timerRemainingSec?.let { Text("Timer %02d:%02d".format(it / 60, it % 60), fontSize = 28.sp) }
     if (link.phase != LinkPhase.STREAMING) Text("Connect glasses and grant camera access before analyzing a view.", color = Warn, fontSize = 12.sp)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

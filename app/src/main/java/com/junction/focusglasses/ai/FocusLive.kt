@@ -7,6 +7,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import com.junction.focusglasses.audio.AmbientPlayer
@@ -48,6 +49,8 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
     private const val IN_RATE = 16_000
     private const val OUT_RATE = 24_000
     private const val MAX_FAILED_CONNECTS = 3
+    /** Never start an unsolicited reply while the wearer is still forming a command. */
+    private const val USER_TURN_GRACE_MS = 1_200L
 
     val SYSTEM_PROMPT =
         """
@@ -110,6 +113,8 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
   private var resumeHandle: String? = null
   private var failedConnects = 0
   private var setupDone = false
+  @Volatile private var reconnectScheduled = false
+  @Volatile private var lastUserSpeechAt = 0L
 
   private var micThread: Thread? = null
   @Volatile private var micOn = false
@@ -136,6 +141,7 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
 
   fun disconnect() {
     wanted = false
+    reconnectScheduled = false
     socket?.close(1000, "bye")
     socket = null
     stopAudio()
@@ -145,6 +151,7 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
   }
 
   private fun openSocket() {
+    reconnectScheduled = false
     setupDone = false
     _state.value = LiveState.CONNECTING
     _status.value = if (resumeHandle == null) "Focus Live: connecting…" else "Focus Live: reconnecting…"
@@ -175,7 +182,8 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
       }
 
   private fun onDropped(webSocket: WebSocket, why: String) {
-    if (webSocket != socket) return
+    if (webSocket != socket || reconnectScheduled) return
+    reconnectScheduled = true
     Log.w(TAG, "connection $why")
     stopAudio()
     scope.launch(Dispatchers.Main) {
@@ -183,11 +191,15 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
       if (!setupDone) failedConnects++
       if (failedConnects >= MAX_FAILED_CONNECTS) {
         wanted = false
+        reconnectScheduled = false
         _state.value = LiveState.ERROR
         _status.value = "Focus Live: unavailable ($why), using offline voice"
         return@launch
       }
-      delay(if (setupDone) 200 else 1500)
+      // A short, bounded backoff avoids a tight reconnect loop when Bluetooth or the network is
+      // changing underneath us, while session resumption preserves the conversation.
+      delay(if (setupDone) 750 else 1_500)
+      reconnectScheduled = false
       if (wanted) openSocket()
     }
   }
@@ -297,11 +309,13 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
         }
       }
     }
-    c.optJSONObject("inputTranscription")?.optString("text")?.let { userText.append(it) }
+    c.optJSONObject("inputTranscription")?.optString("text")?.let {
+      markUserSpeaking()
+      userText.append(it)
+    }
     c.optJSONObject("outputTranscription")?.optString("text")?.let { modelText.append(it) }
     if (c.optBoolean("interrupted")) {
-      flushPlayback = true
-      playQueue.clear()
+      interruptForUserSpeech()
     }
     if (c.optBoolean("turnComplete")) {
       val heard = userText.toString().trim()
@@ -340,8 +354,19 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
 
   // region Client messages
 
-  /** Tells Gemini something happened; it answers out loud. Interrupts whatever it was saying. */
+  /** Tells Gemini something happened, but lets a just-started wearer turn finish first. */
   fun event(text: String) {
+    if (SystemClock.elapsedRealtime() - lastUserSpeechAt < USER_TURN_GRACE_MS) {
+      scope.launch {
+        delay(USER_TURN_GRACE_MS)
+        if (SystemClock.elapsedRealtime() - lastUserSpeechAt >= USER_TURN_GRACE_MS) sendEvent(text)
+      }
+      return
+    }
+    sendEvent(text)
+  }
+
+  private fun sendEvent(text: String) {
     val s = socket ?: return
     if (inTool) {
       Log.i(TAG, "event muted during tool call: $text")
@@ -350,6 +375,21 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
     Log.i(TAG, "event: $text")
     val turn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", "[EVENT] $text")))
     s.send(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
+  }
+
+  /** Called by glasses Speech as soon as a non-empty partial arrives: the wearer always wins. */
+  fun interruptForUserSpeech() {
+    markUserSpeaking()
+    flushPlayback = true
+    playQueue.clear()
+    if (_speaking.value) {
+      setSpeaking(false)
+      Log.i(TAG, "playback interrupted for wearer speech")
+    }
+  }
+
+  private fun markUserSpeaking() {
+    lastUserSpeechAt = SystemClock.elapsedRealtime()
   }
 
   /**
@@ -384,29 +424,23 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
                   val minBuf = AudioRecord.getMinBufferSize(IN_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
                   val rec =
                       AudioRecord(
-                          MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                          // VOICE_COMMUNICATION asks Android for acoustic echo cancellation, so
+                          // we can keep sending the microphone while Gemini is speaking. The old
+                          // implementation ended the input stream during playback, which made
+                          // barge-in impossible and dropped the beginning of a reply.
+                          MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                           IN_RATE,
                           AudioFormat.CHANNEL_IN_MONO,
                           AudioFormat.ENCODING_PCM_16BIT,
                           maxOf(minBuf, IN_RATE),
                       )
                   val chunk = ByteArray(IN_RATE / 10 * 2) // 100 ms
-                  var paused = false
                   try {
                     rec.startRecording()
                     while (micOn) {
                       val n = rec.read(chunk, 0, chunk.size)
                       if (n <= 0) continue
                       val s = socket ?: continue
-                      // Don't let Gemini hear itself through the phone mic while it talks.
-                      if (_speaking.value) {
-                        if (!paused) {
-                          paused = true
-                          s.send("""{"realtimeInput":{"audioStreamEnd":true}}""")
-                        }
-                        continue
-                      }
-                      paused = false
                       val b64 = Base64.encodeToString(chunk, 0, n, Base64.NO_WRAP)
                       s.send("""{"realtimeInput":{"audio":{"data":"$b64","mimeType":"audio/pcm;rate=$IN_RATE"}}}""")
                     }

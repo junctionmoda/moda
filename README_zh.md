@@ -11,12 +11,12 @@ Junction 2026 · 基于 Meta Wearables Device Access Toolkit（DAT）1.0.1 的 R
 | 眼镜连接 | DAT 注册、摄像头流、IMU、MockDeviceKit 测试模式、实验性触控和 Speech 接入 |
 | 模式调度 | Work、Cooking、Meeting 的开启、暂停、恢复、结束和切换 |
 | Work Mode | 专注计时、舒缓音乐、勿扰模式、手机分心提醒、距离/坐姿提醒、休息确认、专注树和本地统计 |
-| Cooking Mode | 手动冰箱情境提示、单帧 Gemini 建议、10 分钟计时、饭后洗碗本地提醒 |
+| Cooking Mode | 手动冰箱情境提示、单帧 Gemini 建议、可选的场景变化触发主动视觉、计时、饭后洗碗本地提醒 |
 | Meeting Mode | 读取手机本地日历下一场会议、开始/延迟/跳过确认、录音同意确认和本地行动项 |
 
 ## Demo 边界
 
-- Cooking Mode 不会自动识别冰箱、火焰、烧焦或食品安全状态；冰箱触发为手动操作。Gemini 仅在用户主动点击后分析一张画面，且需要配置 API key。
+- Cooking Mode 不会自动识别冰箱、火焰、烧焦或食品安全状态；冰箱触发为手动操作。可选的主动视觉会在场景出现明显变化时，最多每 45 秒向 Gemini 发送一帧，且默认关闭、需要配置 API key。
 - Meeting Mode 会记录用户是否同意录音，并保存本地笔记；尚未实现持续录音或会议转写，也不是后台全天候日历闹钟。
 - 眼镜触控和 Speech 属于 DAT 实验能力，需要开发者权限与真实设备验证。手机控件和 MockDeviceKit 仅用于验证 App 流程。
 

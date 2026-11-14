@@ -140,8 +140,11 @@ class FocusEngine(
 
   private fun phoneBusy(now: Long) = now - phoneEvidenceAt < PHONE_QUIET_MS
 
-  // Phone detection smoothing: last 3 frame scores.
+  // Phone detection smoothing: recent scores plus a short exit hysteresis. Entering needs
+  // corroboration; leaving needs three weak frames, so a hand, glare, or one bad camera frame
+  // cannot repeatedly flip the state and create duplicate distraction cards.
   private val recentScores = ArrayDeque<Float>()
+  private var phoneExitFrames = 0
 
   // Posture
   private var emaPitch: Double? = null
@@ -196,6 +199,7 @@ class FocusEngine(
     phaseFocusMs = 0
     lastNudgeAt = 0
     phoneEvidenceAt = 0
+    phoneExitFrames = 0
     lastPostureAlertAt = 0
     recentScores.clear()
     _ui.value =
@@ -518,8 +522,18 @@ class FocusEngine(
     // mid confidence (all of the last 4 frames), which is how a phone held in front of a screen looks.
     val confident = recentScores.toList().takeLast(3).count { it >= PHONE_SCORE } >= 2
     val sustained = recentScores.size == 4 && recentScores.all { it >= PHONE_HINT_SCORE } && recentScores.average() >= PHONE_SUSTAINED_MEAN
-    val seen = confident || sustained
     val wasSeen = _ui.value.phoneSeen
+    val seen =
+        if (wasSeen) {
+          if (det.score < PHONE_HINT_SCORE) phoneExitFrames++ else phoneExitFrames = 0
+          phoneExitFrames < 3
+        } else {
+          phoneExitFrames = 0
+          confident || sustained
+        }
+    if (seen != wasSeen) {
+      Log.i(TAG, "phone ${if (seen) "entered" else "left"} view: score=%.2f recent=%s".format(det.score, recentScores.joinToString { "%.2f".format(it) }))
+    }
     _ui.update { it.copy(phoneSeen = seen, lastPhoneScore = det.score) }
     if (seen && !wasSeen && _ui.value.phase == FocusPhase.FOCUS) onDistraction("Phone in view")
   }

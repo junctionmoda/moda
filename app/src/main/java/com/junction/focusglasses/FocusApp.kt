@@ -49,6 +49,12 @@ class AppGraph(app: Application) {
 
   init {
     link.bindModeController(modes)
+    // Any partial from glasses Speech is a strong signal that the wearer is taking a turn.
+    // Stop both output paths before waiting for the final command/transcript.
+    link.bindUserSpeechListener {
+      live.interruptForUserSpeech()
+      voice.interrupt()
+    }
     live.toolHandler = ::onLiveTool
     scope.launch {
       settings.settings.collect {

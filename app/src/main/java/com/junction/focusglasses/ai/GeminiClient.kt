@@ -115,6 +115,50 @@ object GeminiClient {
         }
       }
 
+  /**
+   * An infrequent, consented camera check for Cooking Mode. It returns NO_ACTION when the image
+   * does not justify interrupting the wearer, so the app can stay quiet during routine prep.
+   */
+  suspend fun describeCookingScene(bitmap: Bitmap, apiKey: String, model: String): String? =
+      withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext null
+        try {
+          val jpeg = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }.toByteArray()
+          val prompt =
+              "You are a cautious, proactive cooking assistant viewing one first-person kitchen image. " +
+                  "Classify it silently as fridge/pantry, ingredient-prep, cooktop, plating, or other. " +
+                  "Reply exactly NO_ACTION unless there is one clear, useful next step visible. If useful, reply with one short suggestion grounded only in visible ingredients or cookware. " +
+                  "Never claim food is cooked, safe, burnt, or unsafe; tell the cook to check heat and food safety when relevant. Under 32 words."
+          val body =
+              JSONObject().put(
+                  "contents",
+                  JSONArray().put(
+                      JSONObject().put(
+                          "parts",
+                          JSONArray()
+                              .put(JSONObject().put("text", prompt))
+                              .put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/jpeg").put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP)))),
+                      ),
+                  ),
+              )
+          val conn = (URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent").openConnection() as HttpURLConnection)
+          conn.requestMethod = "POST"
+          conn.connectTimeout = 8000
+          conn.readTimeout = 15000
+          conn.doOutput = true
+          conn.setRequestProperty("Content-Type", "application/json")
+          conn.setRequestProperty("x-goog-api-key", apiKey)
+          conn.outputStream.use { it.write(body.toString().toByteArray()) }
+          if (conn.responseCode !in 200..299) return@withContext null
+          JSONObject(conn.inputStream.bufferedReader().readText())
+              .getJSONArray("candidates").getJSONObject(0).getJSONObject("content")
+              .getJSONArray("parts").getJSONObject(0).getString("text").trim().take(220)
+        } catch (t: Throwable) {
+          Log.w(TAG, "describeCookingScene failed", t)
+          null
+        }
+      }
+
   /** Text-only intent classification; no meeting audio or calendar content is sent. */
   suspend fun classifyMeetingIntent(text: String, apiKey: String, model: String): String? =
       withContext(Dispatchers.IO) {

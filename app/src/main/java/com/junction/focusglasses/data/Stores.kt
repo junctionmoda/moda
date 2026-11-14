@@ -29,6 +29,8 @@ data class Settings(
     val geminiModel: String = "gemini-3.8-flash",
     /** Cooking uses Live only when explicitly enabled; one-frame analysis remains the reliable fallback. */
     val cookingLive: Boolean = false,
+    /** Sends occasional, scene-change-gated cooking frames to Gemini for optional proactive advice. */
+    val cookingProactiveVision: Boolean = false,
     /** TTS voice name; blank = automatic (a soft US voice when available). */
     val ttsVoice: String = "",
     /** Focus Live: Gemini Live voice coach (needs the Gemini key); falls back to the offline voice. */
@@ -83,6 +85,7 @@ class SettingsStore(context: Context) {
         // gemini-2.5-flash is closed to new API users (HTTP 404 "no longer available").
         geminiModel = (prefs.getString("geminiModel", d.geminiModel) ?: d.geminiModel).let { if (it == "gemini-2.5-flash") d.geminiModel else it },
         cookingLive = prefs.getBoolean("cookingLive", d.cookingLive),
+        cookingProactiveVision = prefs.getBoolean("cookingProactiveVision", d.cookingProactiveVision),
     )
   }
 
@@ -108,6 +111,7 @@ class SettingsStore(context: Context) {
         .putString("geminiKey", s.geminiKey)
         .putString("geminiModel", s.geminiModel)
         .putBoolean("cookingLive", s.cookingLive)
+        .putBoolean("cookingProactiveVision", s.cookingProactiveVision)
         .apply()
     _settings.value = s
   }

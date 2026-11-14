@@ -31,6 +31,10 @@ import com.meta.wearable.dat.inputs.addInputs
 import com.meta.wearable.dat.inputs.types.InputEvent
 import com.meta.wearable.dat.inputs.types.InputsConfiguration
 import com.meta.wearable.dat.speech.addSpeech
+import com.meta.wearable.dat.speech.removeSpeech
+import com.meta.wearable.dat.speech.Speech
+import com.meta.wearable.dat.speech.types.SpeechError
+import com.meta.wearable.dat.speech.types.SpeechState
 import com.junction.focusglasses.modes.ModeCommand
 import com.junction.focusglasses.modes.ModeController
 import com.junction.focusglasses.vision.FrameConverter
@@ -129,6 +133,11 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     modeController = controller
   }
 
+  /** A partial transcription means the wearer has started talking and should take priority. */
+  fun bindUserSpeechListener(listener: () -> Unit) {
+    onUserSpeech = listener
+  }
+
   /** Must be called only after DAT microphone permission has been granted. */
   fun enableModeSpeech() {
     speechRequested = true
@@ -149,6 +158,10 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
   private var inputsAttached = false
   private var speechRequested = false
   private var speechAttached = false
+  private var activeSpeech: Speech? = null
+  private var speechRestartJob: Job? = null
+  private var speechHasStarted = false
+  private var onUserSpeech: (() -> Unit)? = null
   private val sessionJobs = mutableListOf<Job>()
   private var lastFrameProcessedAt = 0L
   private var motionCount = 0L
@@ -331,16 +344,52 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     current.addSpeech().fold(
         onSuccess = { speech ->
           speechAttached = true
-          _status.update { it.copy(modeControlsStatus = "Mode voice: listening") }
+          activeSpeech = speech
+          speechHasStarted = false
+          _status.update { it.copy(modeControlsStatus = "Mode voice: starting") }
           sessionJobs += scope.launch {
             speech.transcriptions.collect { transcript ->
-              if (transcript?.isFinal == true) {
-                modeController?.submitGlassesTranscript(transcript.text)
+              val text = transcript?.text?.trim().orEmpty()
+              if (text.isNotEmpty()) {
+                // Do this for partials too: it stops output before the final command arrives.
+                onUserSpeech?.invoke()
+                _status.update { it.copy(modeControlsStatus = if (transcript?.isFinal == true) "Mode voice: heard command" else "Mode voice: hearing…") }
+              }
+              if (transcript?.isFinal == true && text.isNotEmpty()) {
+                modeController?.submitGlassesTranscript(text)
+              }
+            }
+          }
+          sessionJobs += scope.launch {
+            speech.state.collect { state ->
+              Log.i(TAG, "speech state $state")
+              when (state) {
+                SpeechState.STARTED -> {
+                  speechHasStarted = true
+                  _status.update { it.copy(modeControlsStatus = "Mode voice: listening") }
+                }
+                // The initial STOPPED is normal. A later STOPPED commonly follows a capability
+                // crossing, so restart the existing recognizer instead of silently going deaf.
+                SpeechState.STOPPED -> if (speechHasStarted) restartSpeech(current)
+                else -> Unit
+              }
+            }
+          }
+          sessionJobs += scope.launch {
+            speech.errors.collect { error ->
+              if (error == null) return@collect
+              Log.w(TAG, "mode speech error: ${error.description}")
+              if (error == SpeechError.UNAVAILABLE) {
+                _status.update { it.copy(modeControlsStatus = "Mode voice unavailable on these glasses") }
+              } else {
+                _status.update { it.copy(modeControlsStatus = "Mode voice reconnecting…") }
+                restartSpeech(current)
               }
             }
           }
           speech.start().onFailure { error, _ ->
             _status.update { it.copy(modeControlsStatus = "Mode voice unavailable: ${error.description}") }
+            restartSpeech(current)
           }
         },
         onFailure = { error, _ ->
@@ -348,6 +397,26 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
           Log.w(TAG, "mode speech unavailable: ${error.description}")
         },
     )
+  }
+
+  /** Restarts the same DAT Speech capability after a transient stop; never retries unsupported hardware. */
+  private fun restartSpeech(current: DeviceSession) {
+    if (speechRestartJob?.isActive == true || !speechRequested || session !== current) return
+    speechRestartJob =
+        scope.launch {
+          repeat(3) { attempt ->
+            delay(700L * (attempt + 1))
+            val speech = activeSpeech ?: return@launch
+            if (session !== current || speech.state.value != SpeechState.STOPPED) return@launch
+            Log.i(TAG, "restarting glasses speech (${attempt + 1}/3)")
+            speech.start().onFailure { error, _ -> Log.w(TAG, "speech restart rejected: ${error.description}") }
+            delay(500)
+            if (speech.state.value != SpeechState.STOPPED) return@launch
+          }
+          if (session === current && activeSpeech?.state?.value == SpeechState.STOPPED) {
+            _status.update { it.copy(modeControlsStatus = "Mode voice stopped — tap Enable mode speech to retry") }
+          }
+        }
   }
 
   private fun startCamera() {
@@ -457,6 +526,12 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     sessionJobs.clear()
     camera = null
     motion = null
+    speechRestartJob?.cancel()
+    speechRestartJob = null
+    activeSpeech?.stop()
+    stopped.removeSpeech()
+    activeSpeech = null
+    speechHasStarted = false
     inputsAttached = false
     speechAttached = false
     session = null
