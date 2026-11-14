@@ -13,7 +13,7 @@ import org.json.JSONObject
 
 /**
  * Optional Gemini call: looks at one frame from the glasses when a session starts and names the
- * task in a few words ("看书", "写代码"). Only used when an API key is set in Settings. The frame
+ * task in a few words ("reading", "writing code"). Only used when an API key is set in Settings. The frame
  * is sent once and not stored.
  */
 object GeminiClient {
@@ -25,8 +25,8 @@ object GeminiClient {
         try {
           val jpeg = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }.toByteArray()
           val prompt =
-              "这是一个人戴着眼镜看到的第一人称画面，他准备开始专注工作或学习。" +
-                  "用不超过6个汉字说出他正在做的任务，例如：看书、写代码、做数学题、写论文。只输出任务名。"
+              "This is a first-person photo from smart glasses worn by someone about to start focused work or study. " +
+                  "Name the task they are doing in at most 4 words, e.g. reading, writing code, math homework, writing an essay. Output only the task, lowercase."
           val body =
               JSONObject()
                   .put(

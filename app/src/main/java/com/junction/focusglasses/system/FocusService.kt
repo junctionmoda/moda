@@ -50,7 +50,7 @@ class FocusService : Service() {
   override fun onCreate() {
     super.onCreate()
     val nm = getSystemService(NotificationManager::class.java)
-    nm.createNotificationChannel(NotificationChannel(CHANNEL, "专注会话", NotificationManager.IMPORTANCE_LOW))
+    nm.createNotificationChannel(NotificationChannel(CHANNEL, "Work Mode", NotificationManager.IMPORTANCE_LOW))
     val filter = IntentFilter(Intent.ACTION_USER_PRESENT)
     if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(unlockReceiver, filter, Context.RECEIVER_EXPORTED)
     else registerReceiver(unlockReceiver, filter)
@@ -68,13 +68,19 @@ class FocusService : Service() {
     val notification =
         Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("专注中")
-            .setContentText("眼镜正在陪你专注")
+            .setContentTitle("Work Mode")
+            .setContentText("Your glasses are keeping you company")
             .setContentIntent(open)
             .setOngoing(true)
             .build()
     try {
-      startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+      // Microphone type keeps the voice commands working with the screen off; only allowed once
+      // RECORD_AUDIO is granted.
+      val mic =
+          checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+      val type =
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+      startForeground(NOTIFICATION_ID, notification, type)
     } catch (t: Throwable) {
       Log.w("FocusGlasses:Service", "startForeground failed", t)
       stopSelf()

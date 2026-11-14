@@ -6,6 +6,7 @@ composeBom = "2026.05.01"
 mwdat = "1.0.1"
 lifecycle = "2.10.0"
 mediapipe = "0.10.26"
+vosk = "0.3.75"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -17,6 +18,7 @@ mwdat-core = { group = "com.meta.wearable", name = "mwdat-core", version.ref = "
 mwdat-camera = { group = "com.meta.wearable", name = "mwdat-camera", version.ref = "mwdat" }
 mwdat-motion = { group = "com.meta.wearable", name = "mwdat-motion", version.ref = "mwdat" }
 mwdat-mockdevice = { group = "com.meta.wearable", name = "mwdat-mockdevice", version.ref = "mwdat" }
+vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 mediapipe-tasks-vision = { group = "com.google.mediapipe", name = "tasks-vision", version.ref = "mediapipe" }
 
 [plugins]

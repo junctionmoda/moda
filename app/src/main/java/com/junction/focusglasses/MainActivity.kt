@@ -76,6 +76,7 @@ import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.meta.wearable.dat.core.types.RegistrationState
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
@@ -86,6 +87,7 @@ class MainActivity : ComponentActivity() {
       buildList {
             add(Manifest.permission.BLUETOOTH_CONNECT)
             add(Manifest.permission.CAMERA)
+            add(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
           }
           .toTypedArray()
@@ -134,6 +136,8 @@ class MainActivity : ComponentActivity() {
       Wearables.initialize(this)
       graph.link.onWearablesInitialized()
     }
+    // Voice commands: offline recognizer on the phone mic.
+    if (granted(Manifest.permission.RECORD_AUDIO)) graph.commands.start()
   }
 }
 
@@ -164,13 +168,13 @@ private fun AppScreen(
         Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      Text("专注眼镜", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-      Text("Ray-Ban Meta 陪你专注：番茄钟 · 分心提醒 · 坐姿 · 小树", color = Muted, fontSize = 13.sp)
+      Text("FocusGlasses", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+      Text("Ray-Ban Meta focus companion: Work Mode · distraction nudges · posture · focus tree", color = Muted, fontSize = 13.sp)
 
       if (!permissionsGranted) {
-        Section("需要权限") {
-          Text("蓝牙（连接眼镜）、摄像头（测试模式）、通知（后台计时）。", color = Muted)
-          Button(onClick = onRequestPermissions) { Text("授予权限") }
+        Section("Permissions needed") {
+          Text("Bluetooth (glasses), microphone (voice commands), camera (test mode), notifications (timer in background).", color = Muted)
+          Button(onClick = onRequestPermissions) { Text("Grant permissions") }
         }
       }
 
@@ -211,50 +215,50 @@ private fun ConnectionSection(
     onUnregister: () -> Unit,
     onRequestGlassesCamera: () -> Unit,
 ) {
-  Section("眼镜连接") {
+  Section("Glasses") {
     val reg =
         when (link.registration) {
-          RegistrationState.REGISTERED -> "已注册"
-          RegistrationState.REGISTERING -> "注册中…"
-          RegistrationState.AVAILABLE -> "未注册"
-          RegistrationState.UNAVAILABLE -> "不可用（Meta AI app 未安装或未开开发者模式）"
+          RegistrationState.REGISTERED -> "registered"
+          RegistrationState.REGISTERING -> "registering…"
+          RegistrationState.AVAILABLE -> "not registered"
+          RegistrationState.UNAVAILABLE -> "unavailable (Meta AI app missing or Developer Mode off)"
           else -> link.registration.toString()
         }
     val phase =
         when (link.phase) {
-          LinkPhase.IDLE -> "未连接"
-          LinkPhase.CONNECTING -> "连接中…"
-          LinkPhase.WAITING_PERMISSION -> "等待眼镜摄像头授权"
-          LinkPhase.STREAMING -> "已连接，画面传输中"
-          LinkPhase.PAUSED -> "已暂停（眼镜摘下或折叠）"
+          LinkPhase.IDLE -> "not connected"
+          LinkPhase.CONNECTING -> "connecting…"
+          LinkPhase.WAITING_PERMISSION -> "waiting for glasses camera permission"
+          LinkPhase.STREAMING -> "connected, streaming"
+          LinkPhase.PAUSED -> "paused (glasses off or folded)"
         }
-    Text("SDK：${if (link.wearablesReady) "就绪" else "未初始化（需要蓝牙权限）"}", color = Muted)
-    Text("注册：$reg · 设备 ${link.deviceCount} 台", color = Muted)
-    Text("状态：$phase · 已收帧 ${link.framesReceived}", color = Muted)
+    Text("SDK: ${if (link.wearablesReady) "ready" else "not initialized (needs Bluetooth permission)"}", color = Muted)
+    Text("Registration: $reg · ${link.deviceCount} device(s)", color = Muted)
+    Text("Status: $phase · ${link.framesReceived} frames", color = Muted)
     link.deviceInfo?.let { Text(it, color = Muted, fontSize = 12.sp) }
     link.motionMessage?.let { Text(it, color = Warn, fontSize = 13.sp) }
-    if (link.motionAvailable == true) Text("眼镜 IMU：已连接", color = Muted, fontSize = 13.sp)
+    if (link.motionAvailable == true) Text("Glasses IMU: connected", color = Muted, fontSize = 13.sp)
     link.lastError?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp) }
 
-    LabeledSwitch("测试模式（用手机后摄像头模拟眼镜）", link.mockEnabled, enabled = link.wearablesReady && link.phase == LinkPhase.IDLE) {
+    LabeledSwitch("Test mode (phone back camera simulates the glasses)", link.mockEnabled, enabled = link.wearablesReady && link.phase == LinkPhase.IDLE) {
       if (it) graph.link.enableMock() else graph.link.disableMock()
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       if (!link.mockEnabled) {
         if (link.registration == RegistrationState.REGISTERED) {
-          OutlinedButton(onClick = onUnregister, enabled = link.wearablesReady) { Text("取消注册") }
+          OutlinedButton(onClick = onUnregister, enabled = link.wearablesReady) { Text("Unregister") }
         } else {
-          OutlinedButton(onClick = onRegister, enabled = link.wearablesReady) { Text("在 Meta AI 中注册") }
+          OutlinedButton(onClick = onRegister, enabled = link.wearablesReady) { Text("Register in Meta AI") }
         }
       }
       if (link.phase == LinkPhase.IDLE) {
-        Button(onClick = { graph.link.connect() }, enabled = link.wearablesReady) { Text("连接眼镜") }
+        Button(onClick = { graph.link.connect() }, enabled = link.wearablesReady) { Text("Connect glasses") }
       } else {
-        OutlinedButton(onClick = { graph.link.disconnect() }) { Text("断开") }
+        OutlinedButton(onClick = { graph.link.disconnect() }) { Text("Disconnect") }
       }
     }
     if (link.phase == LinkPhase.WAITING_PERMISSION) {
-      Button(onClick = onRequestGlassesCamera) { Text("授予眼镜摄像头权限") }
+      Button(onClick = onRequestGlassesCamera) { Text("Grant glasses camera permission") }
     }
   }
 }
@@ -263,9 +267,10 @@ private fun ConnectionSection(
 private fun FocusSection(graph: AppGraph, ui: FocusUi, link: LinkStatus) {
   Section(
       when (ui.phase) {
-        FocusPhase.IDLE -> "专注"
-        FocusPhase.FOCUS -> "专注中" + (ui.taskLabel?.let { " · $it" } ?: "")
-        FocusPhase.BREAK -> "休息中"
+        FocusPhase.IDLE -> "Work Mode"
+        FocusPhase.FOCUS -> "Focusing" + (ui.taskLabel?.let { " · $it" } ?: "")
+        FocusPhase.CHECK_IN -> "Need a break?"
+        FocusPhase.BREAK -> "On a break"
       },
   ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -274,36 +279,57 @@ private fun FocusSection(graph: AppGraph, ui: FocusUi, link: LinkStatus) {
       Column {
         val shown = if (ui.phase == FocusPhase.IDLE) graph.settings.current.focusSeconds else ui.remainingSec
         Text("%02d:%02d".format(shown / 60, shown % 60), fontSize = 48.sp, fontWeight = FontWeight.Light)
-        Text("第 ${ui.rounds + if (ui.phase == FocusPhase.FOCUS) 1 else 0} 轮 · 已种 ${ui.treesGrown} 棵树", color = Muted)
-        Text("小树生命 ${ui.treeHealth}%", color = if (ui.treeHealth < 50) Warn else Muted)
+        Text("Round ${ui.rounds + if (ui.phase == FocusPhase.FOCUS || ui.phase == FocusPhase.CHECK_IN) 1 else 0} · ${ui.treesGrown} trees grown" + if (ui.extensions > 0) " · +${ui.extensions} extended" else "", color = Muted)
+        Text("Tree health ${ui.treeHealth}%", color = if (ui.treeHealth < 50) Warn else Muted)
       }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      AssistChip(onClick = {}, label = { Text("分心 ${ui.distractions}") })
-      AssistChip(onClick = {}, label = { Text("坐姿提醒 ${ui.postureAlerts}") })
-      if (ui.dndActive) AssistChip(onClick = {}, label = { Text("勿扰已开") })
+      AssistChip(onClick = {}, label = { Text("Distractions ${ui.distractions}") })
+      if (graph.settings.current.postureAlertsOn) AssistChip(onClick = {}, label = { Text("Posture ${ui.postureAlerts}") })
+      AssistChip(onClick = {}, label = { Text("Distance ${ui.distanceAlerts}") })
+      if (ui.dndActive) AssistChip(onClick = {}, label = { Text("Do Not Disturb on") })
     }
     if (ui.phase != FocusPhase.IDLE) {
-      Text(
+      if (graph.settings.current.postureAlertsOn) Text(
           when {
-            ui.calibrating -> "正在记录你的正常坐姿，请保持 5 秒…"
-            ui.slouching -> "低头中…"
-            else -> "坐姿正常"
+            ui.calibrating -> "Learning your normal posture, hold still for 5 s…"
+            ui.slouching -> "Head down…"
+            else -> "Posture OK"
           },
           color = if (ui.slouching) Warn else Muted,
           fontSize = 13.sp,
       )
+      Text(
+          when {
+            ui.tooClose -> "Too close…"
+            ui.screenRatio != null || ui.bookRatio != null -> "Distance OK"
+            else -> "Distance: learned automatically when you look at a screen or book"
+          },
+          color = if (ui.tooClose) Warn else Muted,
+          fontSize = 13.sp,
+      )
     }
+    val voiceStatus by graph.commands.status.collectAsState()
+    val heard by graph.commands.heard.collectAsState()
+    Text(
+        voiceStatus + (if (heard.isNotBlank()) " · heard \"$heard\"" else "") +
+            (if (ui.phase == FocusPhase.IDLE) " · say \"Start Work Mode\"" else ""),
+        color = Muted,
+        fontSize = 12.sp,
+    )
     if (link.phase != LinkPhase.STREAMING && ui.phase == FocusPhase.IDLE) {
-      Text("提示：未连接眼镜也能开始，只是没有手机检测和眼镜坐姿。", color = Muted, fontSize = 12.sp)
+      Text("Tip: you can start without the glasses, just without phone detection and glasses posture.", color = Muted, fontSize = 12.sp)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       if (ui.phase == FocusPhase.IDLE) {
-        Button(onClick = { graph.engine.start() }) { Text("开始专注") }
+        Button(onClick = { graph.engine.start() }) { Text("Start Work Mode") }
+      } else if (ui.phase == FocusPhase.CHECK_IN) {
+        Button(onClick = { graph.engine.takeBreak() }) { Text("Take a break") }
+        OutlinedButton(onClick = { graph.engine.extendFocus() }) { Text("Not yet, +${graph.settings.current.extendMinutes} min") }
       } else {
-        Button(onClick = { graph.engine.stop() }) { Text("结束") }
-        OutlinedButton(onClick = { graph.engine.skipPhase() }) { Text("跳过") }
-        OutlinedButton(onClick = { graph.engine.recalibrate() }) { Text("校准坐姿") }
+        Button(onClick = { graph.engine.stop() }) { Text("End Work Mode") }
+        OutlinedButton(onClick = { graph.engine.skipPhase() }) { Text("Skip") }
+        OutlinedButton(onClick = { graph.engine.recalibrate() }) { Text("Recalibrate") }
       }
     }
   }
@@ -311,11 +337,11 @@ private fun FocusSection(graph: AppGraph, ui: FocusUi, link: LinkStatus) {
 
 @Composable
 private fun StatsSection(todayMinutes: Int, todaySessions: Int, streak: Int, summary: String?) {
-  Section("统计") {
+  Section("Stats") {
     Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-      Stat("$todayMinutes", "今日分钟")
-      Stat("$todaySessions", "今日次数")
-      Stat("$streak", "连续天数")
+      Stat("$todayMinutes", "min today")
+      Stat("$todaySessions", "sessions today")
+      Stat("$streak", "day streak")
     }
     summary?.let {
       HorizontalDivider(color = Color(0xFF2B3833))
@@ -334,30 +360,45 @@ private fun Stat(value: String, label: String) {
 
 @Composable
 private fun SensorsSection(ui: FocusUi, debug: DebugFrame?, link: LinkStatus) {
-  Section("传感器（调试）") {
+  Section("Sensors (debug)") {
     val src =
         when (ui.pitchSource) {
-          PitchSource.GLASSES -> "眼镜 IMU"
-          PitchSource.PHONE -> "手机传感器"
-          PitchSource.NONE -> "无（开始专注后启用）"
+          PitchSource.GLASSES -> "glasses IMU"
+          PitchSource.PHONE -> "phone sensor"
+          PitchSource.NONE -> "none (starts with Work Mode)"
         }
     Text(
-        "头部角度：${ui.pitchDeg?.let { "%.1f°".format(it) } ?: "—"}  基准：${ui.baselineDeg?.let { "%.1f°".format(it) } ?: "—"}  来源：$src",
+        "Head angle: ${ui.pitchDeg?.let { "%.1f°".format(it) } ?: "—"}  baseline: ${ui.baselineDeg?.let { "%.1f°".format(it) } ?: "—"}  source: $src",
         color = Muted,
         fontSize = 13.sp,
     )
-    link.rawAccel?.let { Text("眼镜加速度 (x, y, z)：$it", color = Muted, fontSize = 12.sp) }
-    Text("低头时角度应变小（负方向）。如果反了，在设置里打开「反转坐姿方向」。", color = Muted, fontSize = 12.sp)
+    link.rawAccel?.let { Text("Glasses accel (x, y, z): $it", color = Muted, fontSize = 12.sp) }
+    Text("The angle should drop (go negative) when you look down. If it goes the other way, turn on Invert posture in Settings.", color = Muted, fontSize = 12.sp)
     Text(
-        "手机检测：${"%.2f".format(ui.lastPhoneScore)}${if (ui.phoneSeen) "  ← 看到手机" else ""}" +
-            if (ui.detectorReady == false) "  （检测模型加载失败）" else "",
+        "Phone detection: ${"%.2f".format(ui.lastPhoneScore)}${if (ui.phoneSeen) "  ← phone seen" else ""}" +
+            if (ui.detectorReady == false) "  (detector failed to load)" else "",
         color = if (ui.phoneSeen) Warn else Muted,
+        fontSize = 13.sp,
+    )
+    fun ratioText(r: Float?, calibrating: Boolean) =
+        when {
+          r != null -> "%.2f×".format(r)
+          calibrating && ui.phase != FocusPhase.IDLE -> "calibrating"
+          else -> "—"
+        }
+    val det = debug?.detection
+    Text(
+        "Distance (size vs. start): screen ${ratioText(ui.screenRatio, ui.screenCalibrating)}" +
+            "  book ${ratioText(ui.bookRatio, ui.bookCalibrating)}" +
+            (det?.screen?.let { "  · ${if (it.label == "tv") "monitor" else "laptop"} %.2f".format(it.size) } ?: "") +
+            (det?.book?.let { "  · book %.2f".format(it.size) } ?: ""),
+        color = if (ui.tooClose) Warn else Muted,
         fontSize = 13.sp,
     )
     if (debug != null) {
       DebugPreview(debug)
     } else if (link.phase == LinkPhase.STREAMING) {
-      Text("等待第一帧…（如果一直没有，可能是视频帧是压缩格式）", color = Muted, fontSize = 12.sp)
+      Text("Waiting for the first frame… (if it never comes, frames may be compressed)", color = Muted, fontSize = 12.sp)
     }
   }
 }
@@ -365,20 +406,26 @@ private fun SensorsSection(ui: FocusUi, debug: DebugFrame?, link: LinkStatus) {
 @Composable
 private fun DebugPreview(frame: DebugFrame) {
   val bmp = frame.bitmap
-  val det = frame.detection
+  val frameDet = frame.detection
+  val det = frameDet.phone
   Box(Modifier.fillMaxWidth().aspectRatio(bmp.width.toFloat() / bmp.height.coerceAtLeast(1))) {
-    Image(bmp.asImageBitmap(), contentDescription = "眼镜画面", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
-    val box = det.box
-    if (box != null && det.score >= 0.3f) {
-      Canvas(Modifier.fillMaxSize()) {
-        val sx = size.width / det.frameWidth
-        val sy = size.height / det.frameHeight
-        drawRect(
-            color = if (det.score >= 0.45f) Color(0xFFFF6B6B) else Color(0xFFFFD36B),
-            topLeft = Offset(box.left * sx, box.top * sy),
-            size = Size(box.width() * sx, box.height() * sy),
-            style = Stroke(width = 3.dp.toPx()),
-        )
+    Image(bmp.asImageBitmap(), contentDescription = "Glasses view", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+    Canvas(Modifier.fillMaxSize()) {
+      val sx = size.width / det.frameWidth
+      val sy = size.height / det.frameHeight
+      fun box(r: android.graphics.RectF, color: Color) =
+          drawRect(
+              color = color,
+              topLeft = Offset(r.left * sx, r.top * sy),
+              size = Size(r.width() * sx, r.height() * sy),
+              style = Stroke(width = 3.dp.toPx()),
+          )
+      // Screen = blue, book = green, phone = red (yellow when unsure).
+      frameDet.screen?.let { box(it.box, Color(0xFF6BB8FF)) }
+      frameDet.book?.let { box(it.box, Color(0xFF8BD3A8)) }
+      val phoneBox = det.box
+      if (phoneBox != null && det.score >= 0.3f) {
+        box(phoneBox, if (det.score >= 0.45f) Color(0xFFFF6B6B) else Color(0xFFFFD36B))
       }
     }
   }
@@ -387,13 +434,21 @@ private fun DebugPreview(frame: DebugFrame) {
 @Composable
 private fun SettingsSection(graph: AppGraph, s: com.junction.focusglasses.data.Settings, running: Boolean) {
   val store = graph.settings
-  Section("设置") {
-    LabeledSwitch("演示模式（专注 2 分钟 / 休息 1 分钟）", s.demoMode, enabled = !running) { v -> store.update { it.copy(demoMode = v) } }
-    LabeledSwitch("舒缓背景音", s.ambientOn) { v ->
+  Section("Settings") {
+    LabeledSwitch("Demo mode (clock runs 20× faster: 40 min = 2 min)", s.demoMode, enabled = !running) { v -> store.update { it.copy(demoMode = v) } }
+    Text("Focus block ${s.focusMinutes} min · extend by ${s.extendMinutes} min · break ${s.breakMinutes} min", color = Muted, fontSize = 13.sp)
+    Slider(
+        value = s.focusMinutes.toFloat(),
+        onValueChange = { v -> store.update { it.copy(focusMinutes = (v / 5).roundToInt() * 5) } },
+        valueRange = 10f..60f,
+        steps = 9,
+        enabled = !running,
+    )
+    LabeledSwitch("Calm background music", s.ambientOn) { v ->
       store.update { it.copy(ambientOn = v) }
       if (!v) graph.ambient.stop() else if (graph.engine.ui.value.phase == FocusPhase.FOCUS) graph.ambient.start()
     }
-    Text("音量 ${(s.ambientVolume * 100).toInt()}%", color = Muted, fontSize = 13.sp)
+    Text("Volume ${(s.ambientVolume * 100).toInt()}%", color = Muted, fontSize = 13.sp)
     Slider(value = s.ambientVolume, onValueChange = { v -> store.update { it.copy(ambientVolume = v) } })
 
     var dndAccess by remember { mutableStateOf(graph.dnd.hasAccess) }
@@ -403,17 +458,26 @@ private fun SettingsSection(graph: AppGraph, s: com.junction.focusglasses.data.S
         delay(1500)
       }
     }
-    LabeledSwitch("专注时自动开启勿扰", s.useDnd) { v -> store.update { it.copy(useDnd = v) } }
+    LabeledSwitch("Turn on Do Not Disturb in Work Mode", s.useDnd) { v -> store.update { it.copy(useDnd = v) } }
     if (s.useDnd && !dndAccess) {
-      TextButton(onClick = { graph.dnd.openAccessSettings() }) { Text("去授予「勿扰权限」→ 找到 专注眼镜 打开") }
+      TextButton(onClick = { graph.dnd.openAccessSettings() }) { Text("Grant Do Not Disturb access → find FocusGlasses and turn it on") }
     }
 
-    Text("坐姿阈值：低头超过 ${s.postureThresholdDeg.toInt()}° 持续 ${s.postureHoldSeconds} 秒提醒", color = Muted, fontSize = 13.sp)
+    Text("Posture: remind after the head drops more than ${s.effectivePostureThresholdDeg.toInt()}° for ${s.postureHoldSeconds} s", color = Muted, fontSize = 13.sp)
     Slider(value = s.postureThresholdDeg, onValueChange = { v -> store.update { it.copy(postureThresholdDeg = v) } }, valueRange = 10f..35f)
-    LabeledSwitch("反转坐姿方向", s.invertPosture) { v -> store.update { it.copy(invertPosture = v) } }
+    LabeledSwitch("Looking-down reminders", s.postureAlertsOn) { v -> store.update { it.copy(postureAlertsOn = v) } }
+    LabeledSwitch("Invert posture", s.invertPosture) { v -> store.update { it.copy(invertPosture = v) } }
+
+    Text(
+        "Distance: remind when the screen/book looks ${"%.2f".format(s.closeRatio)}× bigger than at the start (~${((1 - 1 / s.closeRatio) * 100).toInt()}% closer) for ${s.closeHoldSeconds} s",
+        color = Muted,
+        fontSize = 13.sp,
+    )
+    Slider(value = s.closeRatio, onValueChange = { v -> store.update { it.copy(closeRatio = v) } }, valueRange = 1.1f..1.8f)
 
     HorizontalDivider(color = Color(0xFF2B3833))
-    Text("Gemini（可选）：开始时识别你在做什么任务", color = Muted, fontSize = 13.sp)
+    VoicePicker(graph, s)
+    Text("Gemini (optional): recognizes your task at the start", color = Muted, fontSize = 13.sp)
     var key by remember { mutableStateOf(s.geminiKey) }
     var model by remember { mutableStateOf(s.geminiModel) }
     OutlinedTextField(
@@ -424,9 +488,29 @@ private fun SettingsSection(graph: AppGraph, s: com.junction.focusglasses.data.S
         visualTransformation = PasswordVisualTransformation(),
         modifier = Modifier.fillMaxWidth(),
     )
-    OutlinedTextField(value = model, onValueChange = { model = it.trim() }, label = { Text("模型") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-    Button(onClick = { store.update { it.copy(geminiKey = key, geminiModel = model.ifBlank { "gemini-2.5-flash" }) } }) {
-      Text(if (s.geminiKey.isBlank()) "保存" else "已保存 · 更新")
+    OutlinedTextField(value = model, onValueChange = { model = it.trim() }, label = { Text("Model") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Button(onClick = { store.update { it.copy(geminiKey = key, geminiModel = model.ifBlank { "gemini-3.8-flash" }) } }) {
+      Text(if (s.geminiKey.isBlank()) "Save" else "Saved · update")
+    }
+  }
+}
+
+/** TTS voice choice: tap a name to use it, ▶ to hear a sample. */
+@Composable
+private fun VoicePicker(graph: AppGraph, s: com.junction.focusglasses.data.Settings) {
+  val voices by graph.voice.voices.collectAsState()
+  val current by graph.voice.currentVoice.collectAsState()
+  var expanded by remember { mutableStateOf(false) }
+  Text("Voice: ${current ?: "default"}${if (s.ttsVoice.isBlank()) " (auto)" else ""}", color = Muted, fontSize = 13.sp)
+  TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide voices" else "Choose voice (${voices.size})") }
+  if (expanded) {
+    voices.take(24).forEach { name ->
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { graph.voice.preview(name) }) { Text("▶") }
+        TextButton(onClick = { graph.settings.update { it.copy(ttsVoice = name) } }) {
+          Text(name + if (name == current) "  ✓" else "", color = if (name == current) TextMain else Muted, fontSize = 13.sp)
+        }
+      }
     }
   }
 }
@@ -448,14 +532,14 @@ private fun PauseOverlay(ui: FocusUi) {
   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
     Surface(color = Color(0xF0101614), contentColor = TextMain, modifier = Modifier.fillMaxSize()) {}
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-      Text("先停一下", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = TextMain)
+      Text("Potential Distraction Detected", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextMain)
       ui.pauseReason?.let { Text(it, color = Muted) }
       Canvas(Modifier.size(180.dp)) {
         drawCircle(Color(0x558BD3A8), radius = size.minDimension / 2 * breath)
         drawCircle(Color(0xFF8BD3A8), radius = size.minDimension / 2 * breath, style = Stroke(2.dp.toPx()))
       }
-      Text("跟着圆圈呼吸。真的需要看手机吗？", color = Muted)
-      Text("小树生命 ${ui.treeHealth}%", color = Warn)
+      Text("Breathe with the circle. Getting a little distracted?", color = Muted)
+      Text("Tree health ${ui.treeHealth}%", color = Warn)
     }
   }
 }

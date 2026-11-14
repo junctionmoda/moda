@@ -121,8 +121,8 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
         combine(flows) { it.toList() }.collect { devices ->
           val info =
               devices.joinToString(" | ") { d ->
-                "${d.name.ifBlank { "眼镜" }}：连接 ${d.linkState} · 兼容 ${d.compatibility} · " +
-                    "佩戴 ${d.donState} · 镜腿 ${d.hingeState} · 电量 ${d.batteryLevel}%"
+                "${d.name.ifBlank { "Glasses" }}: link ${d.linkState} · compat ${d.compatibility} · " +
+                    "worn ${d.donState} · hinge ${d.hingeState} · battery ${d.batteryLevel}%"
               }
           Log.i(TAG, "device: $info")
           _status.update { it.copy(deviceInfo = info) }
@@ -132,7 +132,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     scope.launch {
       Wearables.registrationErrorStream.collect { error ->
         Log.w(TAG, "registration error: ${error.description}")
-        reportError("注册失败：${error.description}")
+        reportError("Registration failed: ${error.description}")
       }
     }
   }
@@ -156,7 +156,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
             mockGlasses = glasses
           },
           onFailure = { error, _ ->
-            reportError("测试模式启动失败：${error.description}")
+            reportError("Test mode failed to start: ${error.description}")
             failed = true
           },
       )
@@ -181,7 +181,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
   fun connect() {
     val sel = selector
     if (sel == null) {
-      reportError("SDK 还没初始化，请先授予蓝牙权限")
+      reportError("SDK not initialized yet, grant Bluetooth permission first")
       return
     }
     if (session != null) return
@@ -233,7 +233,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
           else _status.update { it.copy(phase = LinkPhase.WAITING_PERMISSION) }
         },
         onFailure = { error, _ ->
-          reportError("检查摄像头权限失败：${error.description}")
+          reportError("Camera permission check failed: ${error.description}")
           _status.update { it.copy(phase = LinkPhase.WAITING_PERMISSION) }
         },
     )
@@ -282,11 +282,11 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                 }
               }
               sessionJobs += scope.launch {
-                stream.errorStream.collect { error -> reportError("视频流：${error.description}") }
+                stream.errorStream.collect { error -> reportError("Video stream: ${error.description}") }
               }
-              stream.start().onFailure { error, _ -> reportError("视频流启动失败：${error.description}") }
+              stream.start().onFailure { error, _ -> reportError("Video stream failed to start: ${error.description}") }
             },
-            onFailure = { error, _ -> reportError("添加摄像头失败：${describeSessionError(error)}") },
+            onFailure = { error, _ -> reportError("Could not add the camera: ${describeSessionError(error)}") },
         )
   }
 
@@ -318,7 +318,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
           sessionJobs += scope.launch {
             added.errors.collect { error ->
               if (error != null) {
-                _status.update { it.copy(motionMessage = "IMU：${error.description}") }
+                _status.update { it.copy(motionMessage = "IMU: ${error.description}") }
               }
             }
           }
@@ -332,14 +332,14 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
           _status.update {
             it.copy(
                 motionAvailable = false,
-                motionMessage = "眼镜 IMU 不可用（${error?.description}），坐姿改用手机传感器",
+                motionMessage = "Glasses IMU unavailable (${error?.description}), using the phone sensor for posture",
             )
           }
           return@launch
         }
         delay(2000)
       }
-      _status.update { it.copy(motionAvailable = false, motionMessage = "眼镜 IMU 连接超时，坐姿改用手机传感器") }
+      _status.update { it.copy(motionAvailable = false, motionMessage = "Glasses IMU timed out, using the phone sensor for posture") }
     }
   }
 
@@ -362,11 +362,11 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
 
   private fun describeSessionError(error: DeviceSessionError): String =
       when (error) {
-        DeviceSessionError.NO_ELIGIBLE_DEVICE -> "找不到可用的眼镜：请确认眼镜已开机、已在 Meta AI app 里配对，并且已注册本 app"
-        DeviceSessionError.SESSION_ALREADY_EXISTS -> "眼镜上已有其他 app 的会话在运行"
-        DeviceSessionError.DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED -> "眼镜需要更新，请在 Meta AI app 里更新固件"
-        DeviceSessionError.THERMAL_CRITICAL, DeviceSessionError.THERMAL_EMERGENCY -> "眼镜过热，请稍后再试"
-        DeviceSessionError.BATTERY_CRITICAL -> "眼镜电量过低"
+        DeviceSessionError.NO_ELIGIBLE_DEVICE -> "No eligible glasses: make sure they are on, paired in the Meta AI app, and this app is registered"
+        DeviceSessionError.SESSION_ALREADY_EXISTS -> "Another app already has a session on the glasses"
+        DeviceSessionError.DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED -> "The glasses need an update, update the firmware in the Meta AI app"
+        DeviceSessionError.THERMAL_CRITICAL, DeviceSessionError.THERMAL_EMERGENCY -> "The glasses are too hot, try again later"
+        DeviceSessionError.BATTERY_CRITICAL -> "Glasses battery too low"
         else -> error.description
       }
 }

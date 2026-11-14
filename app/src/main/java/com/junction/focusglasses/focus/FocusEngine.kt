@@ -7,13 +7,16 @@ import android.util.Log
 import com.junction.focusglasses.ai.GeminiClient
 import com.junction.focusglasses.audio.AmbientPlayer
 import com.junction.focusglasses.audio.Voice
+import com.junction.focusglasses.audio.VoiceCommand
+import com.junction.focusglasses.audio.VoiceCommands
 import com.junction.focusglasses.data.SettingsStore
 import com.junction.focusglasses.data.StatsStore
 import com.junction.focusglasses.glasses.GlassesLink
 import com.junction.focusglasses.system.DndController
 import com.junction.focusglasses.system.FocusService
 import com.junction.focusglasses.system.PhonePitchSensor
-import com.junction.focusglasses.vision.PhoneDetection
+import com.junction.focusglasses.vision.FrameDetections
+import com.junction.focusglasses.vision.WorkObject
 import com.junction.focusglasses.vision.PhoneDetector
 import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
@@ -29,7 +32,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-enum class FocusPhase { IDLE, FOCUS, BREAK }
+/** CHECK_IN: a focus block just ended and we asked "Need a break?"; waiting for the answer. */
+enum class FocusPhase { IDLE, FOCUS, CHECK_IN, BREAK }
 
 enum class PitchSource { NONE, GLASSES, PHONE }
 
@@ -54,15 +58,24 @@ data class FocusUi(
     val slouching: Boolean = false,
     val pitchSource: PitchSource = PitchSource.NONE,
     val taskLabel: String? = null,
-    /** "先停一下" pause card is shown until this elapsedRealtime. */
+    /** "Potential distraction detected" card is shown until this elapsedRealtime. */
     val pauseCardUntil: Long = 0,
     val pauseReason: String? = null,
     val dndActive: Boolean = false,
     val summary: String? = null,
     val detectorReady: Boolean? = null,
+    /** Apparent screen / book size relative to the calibrated baseline (1.0 = normal distance). */
+    val screenRatio: Float? = null,
+    val bookRatio: Float? = null,
+    val screenCalibrating: Boolean = false,
+    val bookCalibrating: Boolean = false,
+    val tooClose: Boolean = false,
+    val distanceAlerts: Int = 0,
+    /** Times the user asked for more time at the check-in this session. */
+    val extensions: Int = 0,
 )
 
-data class DebugFrame(val bitmap: Bitmap, val detection: PhoneDetection)
+data class DebugFrame(val bitmap: Bitmap, val detection: FrameDetections)
 
 /**
  * The focus session: pomodoro timer, calm music, auto-DND, phone-distraction detection (camera +
@@ -78,16 +91,27 @@ class FocusEngine(
     private val ambient: AmbientPlayer,
     private val voice: Voice,
     private val dnd: DndController,
+    private val commands: VoiceCommands,
 ) {
   companion object {
     private const val TAG = "FocusGlasses:Engine"
     private const val PHONE_SCORE = 0.45f
+    /**
+     * Any hint of a phone (well below [PHONE_SCORE]) or an unlock means the user is busy with the
+     * phone: looking down at it reads as bad posture, and a phone held up close is often boxed as a
+     * full-frame "laptop". So posture / distance reminders stay quiet for [PHONE_QUIET_MS] after it;
+     * the distraction nudge is the right message then.
+     */
+    private const val PHONE_HINT_SCORE = 0.25f
+    private const val PHONE_QUIET_MS = 10_000L
     private const val NUDGE_COOLDOWN_MS = 60_000L
     private const val FOLLOW_UP_MS = 20_000L
     private const val TREE_DAMAGE = 15
     private const val CALIBRATION_MS = 5_000L
     private const val GLASSES_PITCH_FRESH_MS = 2_000L
     private const val PAUSE_CARD_MS = 8_000L
+    /** Laptop apparent size that is too close on its own (normal sitting distance measured 0.52–0.68). */
+    private const val SCREEN_ABS_CLOSE = 0.78f
   }
 
   private val _ui = MutableStateFlow(FocusUi())
@@ -107,6 +131,9 @@ class FocusEngine(
   private var unrecordedFocusMs = 0L
   private var phaseFocusMs = 0L
   private var lastNudgeAt = 0L
+  private var phoneEvidenceAt = 0L
+
+  private fun phoneBusy(now: Long) = now - phoneEvidenceAt < PHONE_QUIET_MS
 
   // Phone detection smoothing: last 3 frame scores.
   private val recentScores = ArrayDeque<Float>()
@@ -119,6 +146,10 @@ class FocusEngine(
   private var lastPostureAlertAt = 0L
   private var lastGlassesPitchAt = 0L
 
+  // Viewing distance
+  private val screenDistance = DistanceTracker(absCloseSize = SCREEN_ABS_CLOSE)
+  private val bookDistance = DistanceTracker()
+
   init {
     // Frames: always analysed while the camera streams, so the preview works before a session.
     scope.launch {
@@ -126,6 +157,14 @@ class FocusEngine(
         val detection = withContext(Dispatchers.Default) { detector.detect(bitmap) }
         if (_ui.value.detectorReady == null) _ui.update { it.copy(detectorReady = detector.isReady) }
         _debug.value = DebugFrame(bitmap, detection)
+        Log.d(
+            TAG,
+            "det phone=%.2f screen=%s book=%s".format(
+                detection.phone.score,
+                detection.screen?.let { "%s/%.2f/%.3f".format(it.label, it.score, it.size) },
+                detection.book?.let { "%.2f/%.3f".format(it.score, it.size) },
+            ),
+        )
         onDetection(detection)
       }
     }
@@ -136,6 +175,17 @@ class FocusEngine(
       }
     }
     scope.launch { settingsStore.settings.collect { s -> ambient.setVolume(s.ambientVolume) } }
+    scope.launch { commands.commands.collect(::onVoiceCommand) }
+  }
+
+  private fun onVoiceCommand(cmd: VoiceCommand) {
+    Log.i(TAG, "voice command $cmd in ${_ui.value.phase}")
+    when (cmd) {
+      VoiceCommand.START_WORK -> start()
+      VoiceCommand.END_WORK -> stop()
+      VoiceCommand.YES -> if (_ui.value.phase == FocusPhase.CHECK_IN) takeBreak()
+      VoiceCommand.NOT_YET -> if (_ui.value.phase == FocusPhase.CHECK_IN) extendFocus()
+    }
   }
 
   val isRunning: Boolean get() = _ui.value.phase != FocusPhase.IDLE
@@ -149,6 +199,7 @@ class FocusEngine(
     completedFocusMs = 0
     phaseFocusMs = 0
     lastNudgeAt = 0
+    phoneEvidenceAt = 0
     lastPostureAlertAt = 0
     recentScores.clear()
     _ui.value =
@@ -164,7 +215,9 @@ class FocusEngine(
       if (SystemClock.elapsedRealtime() - lastGlassesPitchAt > GLASSES_PITCH_FRESH_MS) onPitch(deg, PitchSource.PHONE)
     }
     recalibrate()
-    enterPhase(FocusPhase.FOCUS)
+    voice.chimeStart()
+    voice.say("Welcome back. Your ${s.focusMinutes}-minute focus session is ready.")
+    enterPhase(FocusPhase.FOCUS, announce = false)
     tickJob = scope.launch {
       while (true) {
         tick()
@@ -178,6 +231,7 @@ class FocusEngine(
     if (!isRunning) return
     tickJob?.cancel()
     followUpJob?.cancel()
+    checkInJob?.cancel()
     tick(allowPhaseChange = false) // account the last partial second
     val focusedSec = (unrecordedFocusMs / 1000).toInt()
     if (focusedSec >= 30) statsStore.recordSession(focusedSec)
@@ -186,18 +240,37 @@ class FocusEngine(
     dnd.restore()
     phonePitch.stop()
     FocusService.stop(context)
+    // A block that reached full growth (e.g. stopped at the check-in) still counts as a grown tree.
+    val before = _ui.value
+    val finishedTree = before.phase != FocusPhase.BREAK && before.treeGrowth >= 1f && before.treeHealth > 0
+    if (finishedTree) _ui.update { it.copy(treesGrown = it.treesGrown + 1) }
     val ui = _ui.value
     val stats = statsStore.stats.value
     val minutes = (ui.sessionFocusedSec + 30) / 60
+    val streak = maxOf(stats.streakDays, if (minutes > 0) 1 else 0)
     val summary =
-        "本次专注 $minutes 分钟，分心 ${ui.distractions} 次，坐姿提醒 ${ui.postureAlerts} 次。" +
-            "今天累计 ${stats.todayMinutes} 分钟，连续第 ${maxOf(stats.streakDays, if (minutes > 0) 1 else 0)} 天。"
+        listOf(
+                "$minutes MIN FOCUSED",
+                "${plural(ui.distractions, "distraction")} · " +
+                    (if (ui.postureAlerts > 0) "${plural(ui.postureAlerts, "posture reminder")} · " else "") +
+                    "${plural(ui.distanceAlerts, "distance reminder")} · ${plural(ui.treesGrown, "tree")} grown",
+                "Today ${stats.todayMinutes} min · ${plural(streak, "day")} streak",
+            )
+            .joinToString("\n")
+    val treeLine =
+        when {
+          ui.treesGrown > 0 -> "Your tree has grown."
+          ui.treeHealth <= 0 -> "Your tree needs a little more care next time."
+          else -> "Your tree is still growing."
+        }
     voice.chimeEnd()
-    voice.say(summary)
+    voice.say("Work mode ended. $minutes minutes focused. $treeLine")
     _ui.update {
-      it.copy(phase = FocusPhase.IDLE, remainingSec = 0, summary = summary, dndActive = false, slouching = false, calibrating = false)
+      it.copy(phase = FocusPhase.IDLE, remainingSec = 0, summary = summary, dndActive = false, slouching = false, calibrating = false, tooClose = false)
     }
   }
+
+  private fun plural(n: Int, word: String) = if (n == 1) "1 $word" else "$n ${word}s"
 
   /** Skip to the next phase (focus → break → focus). */
   fun skipPhase() {
@@ -210,68 +283,132 @@ class FocusEngine(
     calibrationSamples.clear()
     calibrationEndsAt = SystemClock.elapsedRealtime() + CALIBRATION_MS
     slouchSince = 0
-    _ui.update { it.copy(calibrating = true, baselineDeg = null, slouching = false) }
+    screenDistance.reset()
+    bookDistance.reset()
+    _ui.update {
+      it.copy(
+          calibrating = true, baselineDeg = null, slouching = false,
+          screenRatio = null, bookRatio = null, screenCalibrating = true, bookCalibrating = true, tooClose = false,
+      )
+    }
   }
 
   // endregion
 
   // region Timer
 
-  private fun enterPhase(phase: FocusPhase) {
+  /** Starts a phase of [totalSec] session seconds (the demo clock runs [Settings.timeScale]× faster). */
+  private fun enterPhase(phase: FocusPhase, announce: Boolean = true) {
     val s = settingsStore.current
     val total = if (phase == FocusPhase.FOCUS) s.focusSeconds else s.breakSeconds
     val now = SystemClock.elapsedRealtime()
-    phaseEndAt = now + total * 1000L
+    timeScale = s.timeScale
+    phaseEndAt = now + total * 1000L / timeScale
     lastTickAt = now
     if (phase == FocusPhase.FOCUS) {
       phaseFocusMs = 0
       if (s.ambientOn) ambient.start()
-      voice.chimeStart()
-      voice.say("专注开始，${total / 60}分钟。")
+      if (announce) {
+        voice.chimeStart()
+        voice.say("Break's over. Your next ${s.focusMinutes}-minute focus block starts now.")
+      }
       _ui.update { it.copy(treeGrowth = 0f, treeHealth = 100) }
     } else {
       ambient.stop()
       voice.chimeEnd()
-      voice.say("这一轮完成了，休息${total / 60}分钟，站起来活动一下。")
+      voice.say("Enjoy your ${s.breakMinutes}-minute break. Stand up and stretch a little.")
     }
     _ui.update { it.copy(phase = phase, phaseTotalSec = total, remainingSec = total) }
   }
 
+  private var timeScale = 1
+
   private fun tick(allowPhaseChange: Boolean = true) {
     val now = SystemClock.elapsedRealtime()
-    val dt = now - lastTickAt
+    val dt = (now - lastTickAt) * timeScale
     lastTickAt = now
     val ui = _ui.value
     if (ui.phase == FocusPhase.FOCUS) {
       unrecordedFocusMs += dt
       phaseFocusMs += dt
-      val growth = (phaseFocusMs / 1000f / ui.phaseTotalSec.coerceAtLeast(1)).coerceIn(0f, 1f)
+      // Growth is measured against the planned block, so extra time keeps the tree fully grown.
+      val growth = (phaseFocusMs / 1000f / settingsStore.current.focusSeconds.coerceAtLeast(1)).coerceIn(0f, 1f)
       _ui.update { it.copy(treeGrowth = growth) }
     }
-    val remaining = ceil((phaseEndAt - now) / 1000.0).toInt().coerceAtLeast(0)
+    val remaining =
+        if (ui.phase == FocusPhase.CHECK_IN) 0 else ceil((phaseEndAt - now) * timeScale / 1000.0).toInt().coerceAtLeast(0)
     _ui.update {
       it.copy(
           remainingSec = remaining,
           sessionFocusedSec = (sessionFocusTotalMs() / 1000).toInt(),
       )
     }
-    if (allowPhaseChange && ui.phase != FocusPhase.IDLE && remaining <= 0) onPhaseFinished()
+    if (allowPhaseChange && (ui.phase == FocusPhase.FOCUS || ui.phase == FocusPhase.BREAK) && remaining <= 0) onPhaseFinished()
   }
 
   private var completedFocusMs = 0L
+  private var checkInJob: Job? = null
 
-  private fun sessionFocusTotalMs(): Long = completedFocusMs + if (_ui.value.phase == FocusPhase.FOCUS) phaseFocusMs else 0
+  private fun sessionFocusTotalMs(): Long =
+      completedFocusMs + if (_ui.value.phase == FocusPhase.FOCUS || _ui.value.phase == FocusPhase.CHECK_IN) phaseFocusMs else 0
 
   private fun onPhaseFinished() {
-    val ui = _ui.value
-    if (ui.phase == FocusPhase.FOCUS) {
-      completedFocusMs += phaseFocusMs
-      phaseFocusMs = 0
-      val healthy = ui.treeHealth > 0
-      _ui.update { it.copy(rounds = it.rounds + 1, treesGrown = it.treesGrown + if (healthy) 1 else 0, treeGrowth = 1f) }
-      enterPhase(FocusPhase.BREAK)
-    } else {
-      enterPhase(FocusPhase.FOCUS)
+    when (_ui.value.phase) {
+      FocusPhase.FOCUS -> askForBreak()
+      FocusPhase.BREAK -> enterPhase(FocusPhase.FOCUS)
+      else -> {}
+    }
+  }
+
+  /** End of a focus block: ask instead of forcing the break; the answer comes by voice or button. */
+  private fun askForBreak() {
+    ambient.setDucked(true)
+    _ui.update { it.copy(phase = FocusPhase.CHECK_IN, remainingSec = 0, treeGrowth = 1f) }
+    voice.chimeEnd()
+    voice.say("Nice work, that's ${(phaseFocusMs / 60_000)} minutes. Need a break?")
+    checkInJob?.cancel()
+    checkInJob = scope.launch {
+      delay(settingsStore.current.checkInTimeoutSeconds * 1000L)
+      if (_ui.value.phase == FocusPhase.CHECK_IN) {
+        Log.i(TAG, "check-in: no answer, taking the break")
+        takeBreak(recordFeedback = false)
+      }
+    }
+  }
+
+  /** Check-in answer "yes": finish the block and start the break. */
+  fun takeBreak(recordFeedback: Boolean = true) {
+    if (_ui.value.phase != FocusPhase.CHECK_IN) return
+    checkInJob?.cancel()
+    ambient.setDucked(false)
+    if (recordFeedback) statsStore.recordCheckIn(extended = false, focusedMinutes = (phaseFocusMs / 60_000).toInt())
+    completedFocusMs += phaseFocusMs
+    phaseFocusMs = 0
+    val healthy = _ui.value.treeHealth > 0
+    _ui.update { it.copy(rounds = it.rounds + 1, treesGrown = it.treesGrown + if (healthy) 1 else 0) }
+    enterPhase(FocusPhase.BREAK)
+  }
+
+  /** Check-in answer "not yet": keep the block going for [Settings.extendMinutes] more and remember it. */
+  fun extendFocus() {
+    if (_ui.value.phase != FocusPhase.CHECK_IN) return
+    checkInJob?.cancel()
+    ambient.setDucked(false)
+    val s = settingsStore.current
+    statsStore.recordCheckIn(extended = true, focusedMinutes = (phaseFocusMs / 60_000).toInt())
+    val now = SystemClock.elapsedRealtime()
+    timeScale = s.timeScale
+    phaseEndAt = now + s.extendSeconds * 1000L / timeScale
+    lastTickAt = now
+    Log.i(TAG, "check-in: extended by ${s.extendMinutes} min")
+    voice.say("Okay, I'll give you ${s.extendMinutes} more minutes.")
+    _ui.update {
+      it.copy(
+          phase = FocusPhase.FOCUS,
+          phaseTotalSec = s.extendSeconds,
+          remainingSec = s.extendSeconds,
+          extensions = it.extensions + 1,
+      )
     }
   }
 
@@ -279,23 +416,82 @@ class FocusEngine(
 
   // region Distractions
 
-  private fun onDetection(det: PhoneDetection) {
+  private fun onDetection(frame: FrameDetections) {
+    val phoneInFrame = frame.phone.score >= PHONE_HINT_SCORE
+    if (phoneInFrame) phoneEvidenceAt = SystemClock.elapsedRealtime()
+    onDistance(frame, phoneInFrame)
+    val det = frame.phone
     recentScores.addLast(det.score)
     while (recentScores.size > 3) recentScores.removeFirst()
     val seen = recentScores.count { it >= PHONE_SCORE } >= 2
     val wasSeen = _ui.value.phoneSeen
     _ui.update { it.copy(phoneSeen = seen, lastPhoneScore = det.score) }
-    if (seen && !wasSeen && _ui.value.phase == FocusPhase.FOCUS) onDistraction("看到你拿起了手机")
+    if (seen && !wasSeen && _ui.value.phase == FocusPhase.FOCUS) onDistraction("Phone in view")
+  }
+
+  /**
+   * Too close to the screen / homework: the object looks [Settings.closeRatio]× bigger than at the
+   * start of the session, held for a while. Only during focus; baselines are taken in focus too.
+   */
+  private fun onDistance(frame: FrameDetections, phoneInFrame: Boolean) {
+    if (_ui.value.phase != FocusPhase.FOCUS) return
+    val s = settingsStore.current
+    val now = SystemClock.elapsedRealtime()
+    fun track(obj: WorkObject?, tracker: DistanceTracker, message: String): Float? {
+      // A frame with a phone in it doesn't vote: the "screen" may be the phone held up close.
+      val ratio = obj?.takeUnless { phoneInFrame }?.let { tracker.add(it.size, now, s.closeRatio) }
+      tracker.update(now)
+      if (phoneBusy(now)) {
+        tracker.closeSince = 0 // restart the hold once the phone is gone
+        return ratio
+      }
+      if (obj != null) {
+        Log.d(TAG, "dist ${obj.label} size=%.2f ratio=%s close=${tracker.close}".format(obj.size, ratio?.let { "%.2f".format(it) }))
+      }
+      if (tracker.close) {
+        val held = now - tracker.closeSince >= s.closeHoldSeconds * 1000L
+        val cooled = now - tracker.lastAlertAt >= s.postureCooldownSeconds * 1000L
+        if (held && cooled) {
+          tracker.lastAlertAt = now
+          Log.i(TAG, "too close: $message ratio=$ratio")
+          _ui.update { it.copy(distanceAlerts = it.distanceAlerts + 1) }
+          voice.say(message)
+        }
+      }
+      return ratio
+    }
+    val screenRatio = track(frame.screen, screenDistance, "You're quite close to the screen. Try sitting back a little.")
+    val bookRatio = track(frame.book, bookDistance, "You're quite close to your book. Lift your head up a bit.")
+    _ui.update {
+      it.copy(
+          screenRatio = screenRatio ?: it.screenRatio,
+          bookRatio = bookRatio ?: it.bookRatio,
+          screenCalibrating = screenDistance.calibrating,
+          bookCalibrating = bookDistance.calibrating,
+          tooClose = screenDistance.close || bookDistance.close,
+      )
+    }
   }
 
   /** Called by the foreground service when the phone is unlocked. */
   fun onPhoneUnlocked() {
-    if (_ui.value.phase == FocusPhase.FOCUS) onDistraction("手机被解锁了")
+    phoneEvidenceAt = SystemClock.elapsedRealtime()
+    if (_ui.value.phase == FocusPhase.FOCUS) onDistraction("Phone unlocked")
   }
 
+  /**
+   * Phone in view and/or phone unlocked. Both usually happen within seconds of each other, so a
+   * second signal inside the cooldown only adds to the reason shown on the card.
+   */
   private fun onDistraction(reason: String) {
     val now = SystemClock.elapsedRealtime()
-    if (now - lastNudgeAt < NUDGE_COOLDOWN_MS) return // one event per minute at most
+    if (now - lastNudgeAt < NUDGE_COOLDOWN_MS) {
+      val ui = _ui.value
+      if (now < ui.pauseCardUntil && ui.pauseReason?.contains(reason) == false) {
+        _ui.update { it.copy(pauseReason = "${it.pauseReason} + $reason") }
+      }
+      return
+    }
     lastNudgeAt = now
     Log.i(TAG, "distraction: $reason")
     _ui.update {
@@ -307,12 +503,12 @@ class FocusEngine(
       )
     }
     voice.softTick()
-    voice.say("先停一下。深呼吸，真的需要看手机吗？")
+    voice.say("Getting a little distracted? Let's get back to work.")
     followUpJob?.cancel()
     followUpJob = scope.launch {
       delay(FOLLOW_UP_MS)
       if (_ui.value.phase == FocusPhase.FOCUS && _ui.value.phoneSeen) {
-        voice.say("小树还在等你。把手机放远一点，我们继续。")
+        voice.say("Your tree is still waiting. Put the phone away and let's keep going.")
       }
     }
   }
@@ -324,7 +520,7 @@ class FocusEngine(
   private fun onPitch(raw: Double, source: PitchSource) {
     val s = settingsStore.current
     val value = if (s.invertPosture) -raw else raw
-    val ema = emaPitch?.let { it * 0.8 + value * 0.2 } ?: value
+    val ema = emaPitch?.let { it * 0.6 + value * 0.4 } ?: value
     emaPitch = ema
     val now = SystemClock.elapsedRealtime()
     var ui = _ui.value.copy(pitchDeg = ema, pitchSource = source)
@@ -337,15 +533,18 @@ class FocusEngine(
     }
     val baseline = ui.baselineDeg
     if (baseline != null && ui.phase == FocusPhase.FOCUS) {
-      val slouching = ema < baseline - s.postureThresholdDeg
-      if (slouching) {
+      val slouching = ema < baseline - s.effectivePostureThresholdDeg
+      if (!s.postureAlertsOn || phoneBusy(now)) {
+        slouchSince = 0 // reminders off, or looking down at the phone: the distraction nudge covers it
+      } else if (slouching) {
         if (slouchSince == 0L) slouchSince = now
         val held = now - slouchSince >= s.postureHoldSeconds * 1000L
         val cooled = now - lastPostureAlertAt >= s.postureCooldownSeconds * 1000L
         if (held && cooled) {
           lastPostureAlertAt = now
           ui = ui.copy(postureAlerts = ui.postureAlerts + 1)
-          voice.say("头低太久了，抬头坐直一下。")
+          Log.i(TAG, "posture alert: pitch=%.1f baseline=%.1f".format(ema, baseline))
+          voice.say("You've been looking down for a while. Try sitting up straight.")
         }
       } else {
         slouchSince = 0
@@ -365,7 +564,7 @@ class FocusEngine(
       val label = GeminiClient.describeTask(frame, key, model) ?: return@launch
       if (!isRunning) return@launch
       _ui.update { it.copy(taskLabel = label) }
-      voice.say("好的，专心$label。")
+      voice.say("Got it, focusing on $label.")
     }
   }
 }

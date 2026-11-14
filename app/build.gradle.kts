@@ -1,3 +1,5 @@
+import java.net.URI
+import java.util.zip.ZipInputStream
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -39,6 +41,7 @@ android {
     targetCompatibility = JavaVersion.VERSION_17
   }
   androidResources { noCompress += "tflite" }
+  sourceSets { getByName("main") { assets.srcDir(layout.buildDirectory.dir("generated/vosk-assets")) } }
   packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 
@@ -55,4 +58,38 @@ dependencies {
   implementation(libs.mwdat.motion)
   implementation(libs.mwdat.mockdevice)
   implementation(libs.mediapipe.tasks.vision)
+  implementation(libs.vosk.android)
+  implementation("net.java.dev.jna:jna:5.18.1@aar")
 }
+
+// Offline English speech model for the voice commands (Apache 2.0, ~40 MB). Downloaded once into
+// .cache/ at the repo root and unpacked into generated assets, so it is not committed to git.
+val voskModelUrl = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+val fetchVoskModel by tasks.registering {
+  val zip = rootProject.layout.projectDirectory.file(".cache/vosk-model-small-en-us-0.15.zip").asFile
+  val outDir = layout.buildDirectory.dir("generated/vosk-assets/model-en-us").get().asFile
+  outputs.dir(outDir)
+  doLast {
+    if (!zip.exists()) {
+      zip.parentFile.mkdirs()
+      logger.lifecycle("Downloading $voskModelUrl")
+      URI(voskModelUrl).toURL().openStream().use { input -> zip.outputStream().use { input.copyTo(it) } }
+    }
+    if (outDir.resolve("uuid").exists()) return@doLast
+    outDir.deleteRecursively()
+    outDir.mkdirs()
+    ZipInputStream(zip.inputStream()).use { zin ->
+      while (true) {
+        val e = zin.nextEntry ?: break
+        val rel = e.name.substringAfter('/') // strip the top-level folder
+        if (rel.isEmpty() || e.isDirectory) continue
+        val f = outDir.resolve(rel)
+        f.parentFile.mkdirs()
+        f.outputStream().use { zin.copyTo(it) }
+      }
+    }
+    // Vosk's StorageService re-unpacks the assets when this id changes.
+    outDir.resolve("uuid").writeText("vosk-model-small-en-us-0.15")
+  }
+}
+tasks.named("preBuild") { dependsOn(fetchVoskModel) }
