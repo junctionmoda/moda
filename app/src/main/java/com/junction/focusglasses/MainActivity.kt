@@ -72,6 +72,10 @@ import com.junction.focusglasses.focus.FocusUi
 import com.junction.focusglasses.focus.PitchSource
 import com.junction.focusglasses.glasses.LinkPhase
 import com.junction.focusglasses.glasses.LinkStatus
+import com.junction.focusglasses.modes.FocusMode
+import com.junction.focusglasses.modes.ModeCommand
+import com.junction.focusglasses.modes.ModeStatus
+import com.junction.focusglasses.modes.ModeUi
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
@@ -98,11 +102,17 @@ class MainActivity : ComponentActivity() {
       registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissionsChanged() }
 
   /** Camera permission on the glasses, granted through the Meta AI app. */
+  private var pendingGlassesPermission: Permission? = null
   private val glassesPermissionLauncher =
       registerForActivityResult(Wearables.RequestPermissionContract()) { result ->
         if (result.getOrDefault(PermissionStatus.Denied) == PermissionStatus.Granted) {
-          graph.link.onCameraPermissionGranted()
+          when (pendingGlassesPermission) {
+            Permission.CAMERA -> graph.link.onCameraPermissionGranted()
+            Permission.MICROPHONE -> graph.link.enableModeSpeech()
+            else -> Unit
+          }
         }
+        pendingGlassesPermission = null
       }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -119,7 +129,14 @@ class MainActivity : ComponentActivity() {
               onRequestPermissions = { permissionLauncher.launch(requiredPermissions) },
               onRegister = { Wearables.startRegistration(this) },
               onUnregister = { Wearables.startUnregistration(this) },
-              onRequestGlassesCamera = { glassesPermissionLauncher.launch(Permission.CAMERA) },
+              onRequestGlassesCamera = {
+                pendingGlassesPermission = Permission.CAMERA
+                glassesPermissionLauncher.launch(Permission.CAMERA)
+              },
+              onRequestGlassesVoice = {
+                pendingGlassesPermission = Permission.MICROPHONE
+                glassesPermissionLauncher.launch(Permission.MICROPHONE)
+              },
           )
         }
       }
@@ -156,12 +173,14 @@ private fun AppScreen(
     onRegister: () -> Unit,
     onUnregister: () -> Unit,
     onRequestGlassesCamera: () -> Unit,
+    onRequestGlassesVoice: () -> Unit,
 ) {
   val link by graph.link.status.collectAsState()
   val ui by graph.engine.ui.collectAsState()
   val debug by graph.engine.debug.collectAsState()
   val settings by graph.settings.settings.collectAsState()
   val stats by graph.stats.stats.collectAsState()
+  val modes by graph.modes.ui.collectAsState()
 
   Box(Modifier.fillMaxSize()) {
     Column(
@@ -178,8 +197,9 @@ private fun AppScreen(
         }
       }
 
-      ConnectionSection(graph, link, onRegister, onUnregister, onRequestGlassesCamera)
-      FocusSection(graph, ui, link)
+      ConnectionSection(graph, link, onRegister, onUnregister, onRequestGlassesCamera, onRequestGlassesVoice)
+      ModeSection(graph, modes)
+      FocusSection(graph, ui, link, modes)
       StatsSection(stats.todayMinutes, stats.todaySessions, stats.streakDays, ui.summary)
       SensorsSection(ui, debug, link)
       SettingsSection(graph, settings, ui.phase != FocusPhase.IDLE)
@@ -214,6 +234,7 @@ private fun ConnectionSection(
     onRegister: () -> Unit,
     onUnregister: () -> Unit,
     onRequestGlassesCamera: () -> Unit,
+    onRequestGlassesVoice: () -> Unit,
 ) {
   Section("Glasses") {
     val reg =
@@ -237,6 +258,7 @@ private fun ConnectionSection(
     Text("Status: $phase · ${link.framesReceived} frames", color = Muted)
     link.deviceInfo?.let { Text(it, color = Muted, fontSize = 12.sp) }
     link.motionMessage?.let { Text(it, color = Warn, fontSize = 13.sp) }
+    Text(link.modeControlsStatus, color = Muted, fontSize = 13.sp)
     if (link.motionAvailable == true) Text("Glasses IMU: connected", color = Muted, fontSize = 13.sp)
     link.lastError?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp) }
 
@@ -260,17 +282,47 @@ private fun ConnectionSection(
     if (link.phase == LinkPhase.WAITING_PERMISSION) {
       Button(onClick = onRequestGlassesCamera) { Text("Grant glasses camera permission") }
     }
+    OutlinedButton(onClick = onRequestGlassesVoice, enabled = link.phase != LinkPhase.IDLE) {
+      Text("Enable glasses mode voice")
+    }
   }
 }
 
 @Composable
-private fun FocusSection(graph: AppGraph, ui: FocusUi, link: LinkStatus) {
+private fun ModeSection(graph: AppGraph, modes: ModeUi) {
+  Section("Focus Modes") {
+    Text("Use voice, glasses touch, or these development controls. Work is the available feature mode.", color = Muted, fontSize = 13.sp)
+    FocusMode.entries.forEach { mode ->
+      Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text("${mode.title}: ${modes.statuses.getValue(mode).name.lowercase()}", modifier = Modifier.weight(1f))
+        OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.Activate(mode)) }) { Text("Select") }
+      }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.Previous) }) { Text("Previous") }
+      OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.TogglePause) }) { Text("Pause / resume") }
+      OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.Next) }) { Text("Next") }
+      OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.End) }) { Text("End") }
+    }
+    Text(modes.lastAction, color = Muted, fontSize = 12.sp)
+  }
+}
+
+@Composable
+private fun FocusSection(graph: AppGraph, ui: FocusUi, link: LinkStatus, modes: ModeUi) {
+  if (modes.activeMode != null && modes.activeMode != FocusMode.WORK) {
+    Section("Work Mode") {
+      Text("Work Mode is paused while ${modes.activeMode.title} Mode is active.", color = Muted)
+    }
+    return
+  }
   Section(
       when (ui.phase) {
         FocusPhase.IDLE -> "Work Mode"
         FocusPhase.FOCUS -> "Focusing" + (ui.taskLabel?.let { " · $it" } ?: "")
         FocusPhase.CHECK_IN -> "Need a break?"
         FocusPhase.BREAK -> "On a break"
+        FocusPhase.PAUSED -> "Work Mode Paused"
       },
   ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -322,12 +374,15 @@ private fun FocusSection(graph: AppGraph, ui: FocusUi, link: LinkStatus) {
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       if (ui.phase == FocusPhase.IDLE) {
-        Button(onClick = { graph.engine.start() }) { Text("Start Work Mode") }
+        Button(onClick = { graph.modes.dispatch(ModeCommand.Activate(FocusMode.WORK)) }) { Text("Start Work Mode") }
       } else if (ui.phase == FocusPhase.CHECK_IN) {
         Button(onClick = { graph.engine.takeBreak() }) { Text("Take a break") }
         OutlinedButton(onClick = { graph.engine.extendFocus() }) { Text("Not yet, +${graph.settings.current.extendMinutes} min") }
+      } else if (ui.phase == FocusPhase.PAUSED) {
+        Button(onClick = { graph.modes.dispatch(ModeCommand.Resume) }) { Text("Resume Work Mode") }
+        OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.End) }) { Text("End Work Mode") }
       } else {
-        Button(onClick = { graph.engine.stop() }) { Text("End Work Mode") }
+        Button(onClick = { graph.modes.dispatch(ModeCommand.End) }) { Text("End Work Mode") }
         OutlinedButton(onClick = { graph.engine.skipPhase() }) { Text("Skip") }
         OutlinedButton(onClick = { graph.engine.recalibrate() }) { Text("Recalibrate") }
       }

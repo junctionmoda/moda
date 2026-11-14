@@ -18,7 +18,20 @@ import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 import org.vosk.android.StorageService
 
-enum class VoiceCommand { START_WORK, END_WORK, YES, NOT_YET }
+enum class VoiceCommand {
+  START_WORK,
+  START_STUDY,
+  START_COOKING,
+  START_RELAX,
+  PAUSE_MODE,
+  RESUME_MODE,
+  NEXT_MODE,
+  PREVIOUS_MODE,
+  END_WORK,
+  END_MODE,
+  YES,
+  NOT_YET,
+}
 
 /**
  * Offline English voice commands (Vosk, small en-us model, phone microphone). The recognizer is
@@ -34,7 +47,9 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
     private const val SAMPLE_RATE = 16_000f
     private val PHRASES =
         listOf(
-            "start work mode", "end work mode", "stop work mode", "finish work mode",
+            "start work mode", "start study mode", "start cooking mode", "start relax mode",
+            "end work mode", "stop work mode", "finish work mode", "end mode",
+            "pause mode", "resume mode", "next mode", "previous mode",
             "yes", "yes please", "sure", "okay", "take a break", "yes take a break", "i need a break",
             "no", "not yet", "no thanks", "not now", "keep going", "more time", "give me more time",
             "i want to finish this", "i want to finish this part", "not yet i want to finish this part",
@@ -48,7 +63,15 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
       val workMode = "work mode" in t
       return when {
         workMode && (" start " in t) -> VoiceCommand.START_WORK
+        "study mode" in t && ("start" in t || "switch" in t) -> VoiceCommand.START_STUDY
+        "cooking mode" in t && ("start" in t || "switch" in t) -> VoiceCommand.START_COOKING
+        "relax mode" in t && ("start" in t || "switch" in t) -> VoiceCommand.START_RELAX
         workMode && (" end " in t || " stop " in t || " finish " in t) -> VoiceCommand.END_WORK
+        "pause" in t -> VoiceCommand.PAUSE_MODE
+        "resume" in t || "continue" in t -> VoiceCommand.RESUME_MODE
+        "next mode" in t -> VoiceCommand.NEXT_MODE
+        "previous mode" in t -> VoiceCommand.PREVIOUS_MODE
+        "end mode" in t || "stop mode" in t -> VoiceCommand.END_MODE
         " not " in t || " no " in t || " finish " in t || "more time" in t || "keep going" in t -> VoiceCommand.NOT_YET
         " yes " in t || " sure " in t || " okay " in t || " break " in t -> VoiceCommand.YES
         else -> null
@@ -131,14 +154,19 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
         override fun onTimeout() {}
       }
 
-  private fun handle(hypothesis: String?) {
-    val text = hypothesis?.let { runCatching { JSONObject(it).optString("text") }.getOrNull() }.orEmpty()
+  /** Accepts a final transcript from either the phone recognizer or DAT glasses Speech. */
+  fun submitFinalTranscript(text: String, source: String) {
     if (text.isBlank() || text == "[unk]") return
     val cmd = parse(text.replace("[unk]", " "))
-    Log.i(TAG, "heard \"$text\" -> $cmd")
+    Log.i(TAG, "$source heard \"$text\" -> $cmd")
     scope.launch {
       _heard.value = text
       cmd?.let { _commands.emit(it) }
     }
+  }
+
+  private fun handle(hypothesis: String?) {
+    val text = hypothesis?.let { runCatching { JSONObject(it).optString("text") }.getOrNull() }.orEmpty()
+    submitFinalTranscript(text, source = "phone")
   }
 }

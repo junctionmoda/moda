@@ -27,6 +27,12 @@ import com.meta.wearable.dat.motion.addMotion
 import com.meta.wearable.dat.motion.types.MotionConfiguration
 import com.meta.wearable.dat.motion.types.MotionSamplingRate
 import com.meta.wearable.dat.motion.types.MotionSource
+import com.meta.wearable.dat.inputs.addInputs
+import com.meta.wearable.dat.inputs.types.InputEvent
+import com.meta.wearable.dat.inputs.types.InputsConfiguration
+import com.meta.wearable.dat.speech.addSpeech
+import com.junction.focusglasses.modes.ModeCommand
+import com.junction.focusglasses.modes.ModeController
 import com.junction.focusglasses.vision.FrameConverter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +67,8 @@ data class LinkStatus(
     val rawAccel: String? = null,
     /** Link / compatibility / worn / hinge / battery of the paired glasses, as the SDK reports. */
     val deviceInfo: String? = null,
+    /** Experimental DAT Inputs / Speech status; independent from camera and IMU state. */
+    val modeControlsStatus: String = "Mode controls: connect glasses to enable",
 )
 
 /** Head-pitch sample in degrees, plus where it came from. */
@@ -93,11 +101,31 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
   /** Head pitch from the glasses IMU (elevation of the camera's forward axis, degrees). */
   val pitch: SharedFlow<PitchSample> = _pitch.asSharedFlow()
 
+  /** Keeps top-level mode navigation outside the camera and motion pipelines. */
+  fun bindModeController(controller: ModeController) {
+    modeController = controller
+  }
+
+  /** Must be called only after DAT microphone permission has been granted. */
+  fun enableModeSpeech() {
+    speechRequested = true
+    val current = session
+    if (current == null || !inputsAttached) {
+      _status.update { it.copy(modeControlsStatus = "Mode voice: connect glasses first") }
+    } else {
+      attachSpeech(current)
+    }
+  }
+
   private var selector: DeviceSelector? = null
   private var session: DeviceSession? = null
   private var camera: Camera? = null
   private var motion: Motion? = null
   private var mockGlasses: MockGlasses? = null
+  private var modeController: ModeController? = null
+  private var inputsAttached = false
+  private var speechRequested = false
+  private var speechAttached = false
   private val sessionJobs = mutableListOf<Job>()
   private var lastFrameProcessedAt = 0L
   private var motionCount = 0L
@@ -217,6 +245,8 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     Log.d(TAG, "session state $state")
     when (state) {
       DeviceSessionState.STARTED -> {
+        attachInputs(current)
+        if (speechRequested) attachSpeech(current)
         if (camera == null) scope.launch { ensureCameraPermissionThenStream() }
         else _status.update { it.copy(phase = LinkPhase.STREAMING) }
       }
@@ -242,6 +272,59 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
   /** Called by the UI after the Meta AI permission flow returned Granted. */
   fun onCameraPermissionGranted() {
     if (session != null && camera == null) startCamera()
+  }
+
+  private fun attachInputs(current: DeviceSession) {
+    if (inputsAttached) return
+    current.addInputs(InputsConfiguration(consumeBack = true)).fold(
+        onSuccess = { inputs ->
+          inputsAttached = true
+          _status.update { it.copy(modeControlsStatus = "Mode touch: ready") }
+          sessionJobs += scope.launch {
+            inputs.events.collect { event ->
+              when (event) {
+                is InputEvent.Nav -> {
+                  val command =
+                      if (event.direction.toString().contains("LEFT")) ModeCommand.Previous
+                      else ModeCommand.Next
+                  modeController?.dispatch(command)
+                }
+                is InputEvent.Select, is InputEvent.Button -> modeController?.dispatch(ModeCommand.TogglePause)
+                is InputEvent.Back -> modeController?.dispatch(ModeCommand.End)
+                else -> Unit
+              }
+            }
+          }
+        },
+        onFailure = { error, _ ->
+          _status.update { it.copy(modeControlsStatus = "Mode touch unavailable: ${error.description}") }
+          Log.w(TAG, "mode inputs unavailable: ${error.description}")
+        },
+    )
+  }
+
+  private fun attachSpeech(current: DeviceSession) {
+    if (speechAttached) return
+    current.addSpeech().fold(
+        onSuccess = { speech ->
+          speechAttached = true
+          _status.update { it.copy(modeControlsStatus = "Mode voice: listening") }
+          sessionJobs += scope.launch {
+            speech.transcriptions.collect { transcript ->
+              if (transcript?.isFinal == true) {
+                modeController?.submitGlassesTranscript(transcript.text)
+              }
+            }
+          }
+          speech.start().onFailure { error, _ ->
+            _status.update { it.copy(modeControlsStatus = "Mode voice unavailable: ${error.description}") }
+          }
+        },
+        onFailure = { error, _ ->
+          _status.update { it.copy(modeControlsStatus = "Mode voice unavailable: ${error.description}") }
+          Log.w(TAG, "mode speech unavailable: ${error.description}")
+        },
+    )
   }
 
   private fun startCamera() {
@@ -349,8 +432,16 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     sessionJobs.clear()
     camera = null
     motion = null
+    inputsAttached = false
+    speechAttached = false
     session = null
-    _status.update { it.copy(phase = LinkPhase.IDLE, motionAvailable = null) }
+    _status.update {
+      it.copy(
+          phase = LinkPhase.IDLE,
+          motionAvailable = null,
+          modeControlsStatus = "Mode controls: glasses disconnected",
+      )
+    }
   }
 
   // endregion

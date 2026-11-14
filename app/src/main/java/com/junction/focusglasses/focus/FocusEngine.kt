@@ -7,8 +7,6 @@ import android.util.Log
 import com.junction.focusglasses.ai.GeminiClient
 import com.junction.focusglasses.audio.AmbientPlayer
 import com.junction.focusglasses.audio.Voice
-import com.junction.focusglasses.audio.VoiceCommand
-import com.junction.focusglasses.audio.VoiceCommands
 import com.junction.focusglasses.data.SettingsStore
 import com.junction.focusglasses.data.StatsStore
 import com.junction.focusglasses.glasses.GlassesLink
@@ -33,7 +31,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** CHECK_IN: a focus block just ended and we asked "Need a break?"; waiting for the answer. */
-enum class FocusPhase { IDLE, FOCUS, CHECK_IN, BREAK }
+enum class FocusPhase { IDLE, FOCUS, CHECK_IN, BREAK, PAUSED }
 
 enum class PitchSource { NONE, GLASSES, PHONE }
 
@@ -91,7 +89,6 @@ class FocusEngine(
     private val ambient: AmbientPlayer,
     private val voice: Voice,
     private val dnd: DndController,
-    private val commands: VoiceCommands,
 ) {
   companion object {
     private const val TAG = "FocusGlasses:Engine"
@@ -132,6 +129,8 @@ class FocusEngine(
   private var phaseFocusMs = 0L
   private var lastNudgeAt = 0L
   private var phoneEvidenceAt = 0L
+  private var pausedPhase: FocusPhase? = null
+  private var pausedRemainingSec = 0
 
   private fun phoneBusy(now: Long) = now - phoneEvidenceAt < PHONE_QUIET_MS
 
@@ -175,20 +174,10 @@ class FocusEngine(
       }
     }
     scope.launch { settingsStore.settings.collect { s -> ambient.setVolume(s.ambientVolume) } }
-    scope.launch { commands.commands.collect(::onVoiceCommand) }
-  }
-
-  private fun onVoiceCommand(cmd: VoiceCommand) {
-    Log.i(TAG, "voice command $cmd in ${_ui.value.phase}")
-    when (cmd) {
-      VoiceCommand.START_WORK -> start()
-      VoiceCommand.END_WORK -> stop()
-      VoiceCommand.YES -> if (_ui.value.phase == FocusPhase.CHECK_IN) takeBreak()
-      VoiceCommand.NOT_YET -> if (_ui.value.phase == FocusPhase.CHECK_IN) extendFocus()
-    }
   }
 
   val isRunning: Boolean get() = _ui.value.phase != FocusPhase.IDLE
+  val isPaused: Boolean get() = _ui.value.phase == FocusPhase.PAUSED
 
   // region Session control
 
@@ -229,6 +218,11 @@ class FocusEngine(
 
   fun stop() {
     if (!isRunning) return
+    if (isPaused) {
+      _ui.update { it.copy(phase = pausedPhase ?: FocusPhase.FOCUS) }
+      lastTickAt = SystemClock.elapsedRealtime()
+      pausedPhase = null
+    }
     tickJob?.cancel()
     followUpJob?.cancel()
     checkInJob?.cancel()
@@ -271,6 +265,57 @@ class FocusEngine(
   }
 
   private fun plural(n: Int, word: String) = if (n == 1) "1 $word" else "$n ${word}s"
+
+  /** Suspend the Work engine while another top-level mode owns the user's attention. */
+  fun pause() {
+    val phase = _ui.value.phase
+    if (phase != FocusPhase.FOCUS && phase != FocusPhase.BREAK && phase != FocusPhase.CHECK_IN) return
+    tick(allowPhaseChange = false)
+    pausedPhase = phase
+    pausedRemainingSec = _ui.value.remainingSec
+    tickJob?.cancel()
+    followUpJob?.cancel()
+    checkInJob?.cancel()
+    ambient.stop()
+    dnd.restore()
+    phonePitch.stop()
+    FocusService.stop(context)
+    _ui.update { it.copy(phase = FocusPhase.PAUSED, dndActive = false, slouching = false) }
+    voice.say("Work mode paused.")
+    Log.i(TAG, "work paused from $phase with $pausedRemainingSec seconds remaining")
+  }
+
+  /** Resume the exact Work focus or break phase that was suspended by the mode controller. */
+  fun resume() {
+    val phase = pausedPhase ?: return
+    if (!isPaused) return
+    val settings = settingsStore.current
+    val now = SystemClock.elapsedRealtime()
+    phaseEndAt = now + pausedRemainingSec * 1000L / timeScale
+    lastTickAt = now
+    FocusService.start(context)
+    val dndOn = settings.useDnd && dnd.enable()
+    phonePitch.start { deg ->
+      if (SystemClock.elapsedRealtime() - lastGlassesPitchAt > GLASSES_PITCH_FRESH_MS) onPitch(deg, PitchSource.PHONE)
+    }
+    if (phase == FocusPhase.FOCUS && settings.ambientOn) ambient.start()
+    _ui.update { it.copy(phase = phase, dndActive = dndOn) }
+    pausedPhase = null
+    tickJob = scope.launch {
+      while (true) {
+        tick()
+        delay(500)
+      }
+    }
+    if (phase == FocusPhase.CHECK_IN) {
+      checkInJob = scope.launch {
+        delay(settings.checkInTimeoutSeconds * 1000L)
+        if (_ui.value.phase == FocusPhase.CHECK_IN) takeBreak(recordFeedback = false)
+      }
+    }
+    voice.say("Work mode resumed.")
+    Log.i(TAG, "work resumed into $phase")
+  }
 
   /** Skip to the next phase (focus → break → focus). */
   fun skipPhase() {
