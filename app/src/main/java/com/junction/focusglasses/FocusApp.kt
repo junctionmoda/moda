@@ -4,6 +4,7 @@ import android.app.Application
 import com.junction.focusglasses.audio.AmbientPlayer
 import com.junction.focusglasses.audio.Voice
 import com.junction.focusglasses.audio.VoiceCommands
+import com.junction.focusglasses.cooking.CookingEngine
 import com.junction.focusglasses.data.SettingsStore
 import com.junction.focusglasses.data.StatsStore
 import com.junction.focusglasses.focus.FocusEngine
@@ -26,7 +27,8 @@ class AppGraph(app: Application) {
   val commands = VoiceCommands(app, scope, voice)
   val link = GlassesLink(app, scope)
   val engine = FocusEngine(app, scope, link, settings, stats, ambient, voice, dnd)
-  val modes = ModeController(scope, engine, commands)
+  val cooking = CookingEngine(app, scope, link, settings, voice)
+  val modes = ModeController(scope, engine, cooking, commands)
   init {
     link.bindModeController(modes)
     scope.launch { settings.settings.collect { voice.setPreferredVoice(it.ttsVoice) } }

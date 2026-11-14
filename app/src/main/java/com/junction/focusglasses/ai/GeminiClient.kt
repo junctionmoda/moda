@@ -78,4 +78,40 @@ object GeminiClient {
           null
         }
       }
+
+  /** User-triggered only: one frame is sent and never stored by this app. */
+  suspend fun describeCookingFrame(bitmap: Bitmap, apiKey: String, model: String): String? =
+      withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext null
+        try {
+          val jpeg = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }.toByteArray()
+          val body =
+              JSONObject().put(
+                  "contents",
+                  JSONArray().put(
+                      JSONObject().put(
+                          "parts",
+                          JSONArray()
+                              .put(JSONObject().put("text", "You are a cautious cooking helper. Describe only visible ingredients or cookware in this first-person kitchen image, then give one short meal idea and one optional shopping-list item. Never claim that food is cooked, safe, burnt, or unsafe; tell the cook to check heat and food safety themselves. Keep under 45 words."))
+                              .put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/jpeg").put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP)))),
+                      ),
+                  ),
+              )
+          val conn = (URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent").openConnection() as HttpURLConnection)
+          conn.requestMethod = "POST"
+          conn.connectTimeout = 8000
+          conn.readTimeout = 15000
+          conn.doOutput = true
+          conn.setRequestProperty("Content-Type", "application/json")
+          conn.setRequestProperty("x-goog-api-key", apiKey)
+          conn.outputStream.use { it.write(body.toString().toByteArray()) }
+          if (conn.responseCode !in 200..299) return@withContext null
+          JSONObject(conn.inputStream.bufferedReader().readText())
+              .getJSONArray("candidates").getJSONObject(0).getJSONObject("content")
+              .getJSONArray("parts").getJSONObject(0).getString("text").trim().take(300)
+        } catch (t: Throwable) {
+          Log.w(TAG, "describeCookingFrame failed", t)
+          null
+        }
+      }
 }

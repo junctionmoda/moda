@@ -76,6 +76,8 @@ import com.junction.focusglasses.modes.FocusMode
 import com.junction.focusglasses.modes.ModeCommand
 import com.junction.focusglasses.modes.ModeStatus
 import com.junction.focusglasses.modes.ModeUi
+import com.junction.focusglasses.cooking.CookingPhase
+import com.junction.focusglasses.cooking.CookingUi
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
@@ -181,6 +183,7 @@ private fun AppScreen(
   val settings by graph.settings.settings.collectAsState()
   val stats by graph.stats.stats.collectAsState()
   val modes by graph.modes.ui.collectAsState()
+  val cooking by graph.cooking.ui.collectAsState()
 
   Box(Modifier.fillMaxSize()) {
     Column(
@@ -199,6 +202,7 @@ private fun AppScreen(
 
       ConnectionSection(graph, link, onRegister, onUnregister, onRequestGlassesCamera, onRequestGlassesVoice)
       ModeSection(graph, modes)
+      if (modes.activeMode == FocusMode.COOKING) CookingSection(graph, cooking, link)
       FocusSection(graph, ui, link, modes)
       StatsSection(stats.todayMinutes, stats.todaySessions, stats.streakDays, ui.summary)
       SensorsSection(ui, debug, link)
@@ -291,7 +295,7 @@ private fun ConnectionSection(
 @Composable
 private fun ModeSection(graph: AppGraph, modes: ModeUi) {
   Section("Focus Modes") {
-    Text("Use voice, glasses touch, or these development controls. Work is the available feature mode.", color = Muted, fontSize = 13.sp)
+    Text("Use voice, glasses touch, or these development controls. Work and Cooking have feature engines.", color = Muted, fontSize = 13.sp)
     FocusMode.entries.forEach { mode ->
       Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text("${mode.title}: ${modes.statuses.getValue(mode).name.lowercase()}", modifier = Modifier.weight(1f))
@@ -305,6 +309,34 @@ private fun ModeSection(graph: AppGraph, modes: ModeUi) {
       OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.End) }) { Text("End") }
     }
     Text(modes.lastAction, color = Muted, fontSize = 12.sp)
+  }
+}
+
+@Composable
+private fun CookingSection(graph: AppGraph, cooking: CookingUi, link: LinkStatus) {
+  Section("Cooking Mode") {
+    Text(
+        when (cooking.phase) {
+          CookingPhase.PLANNING -> "Plan your meal"
+          CookingPhase.COOKING -> "Cooking in progress"
+          CookingPhase.PAUSED -> "Cooking Mode paused"
+          CookingPhase.FINISHED -> "Meal finished"
+          CookingPhase.IDLE -> "Ready"
+        },
+        fontWeight = FontWeight.SemiBold,
+    )
+    Text(cooking.advice, color = Muted)
+    cooking.timerRemainingSec?.let { Text("Timer %02d:%02d".format(it / 60, it % 60), fontSize = 28.sp) }
+    if (link.phase != LinkPhase.STREAMING) Text("Connect glasses and grant camera access before analyzing a view.", color = Warn, fontSize = 12.sp)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      OutlinedButton(onClick = graph.cooking::fridgeOpened) { Text("Fridge opened") }
+      Button(onClick = graph.cooking::analyzeCurrentView, enabled = !cooking.analyzing && link.phase == LinkPhase.STREAMING) { Text(if (cooking.analyzing) "Analyzing…" else "Analyze current view") }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Button(onClick = graph.cooking::startTenMinuteTimer) { Text("Start 10 min timer") }
+      OutlinedButton(onClick = graph.cooking::mealFinished) { Text("Meal finished") }
+    }
+    Text("Camera advice is optional and not a food-safety, fire, or burn detector.", color = Warn, fontSize = 12.sp)
   }
 }
 

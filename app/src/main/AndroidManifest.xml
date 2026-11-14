@@ -65,5 +65,9 @@
             android:name=".system.FocusService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice|microphone" />
+
+        <receiver
+            android:name=".cooking.CookingDishReminderReceiver"
+            android:exported="false" />
     </application>
 </manifest>

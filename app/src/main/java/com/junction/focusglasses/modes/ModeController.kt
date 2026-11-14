@@ -3,6 +3,7 @@ package com.junction.focusglasses.modes
 import android.util.Log
 import com.junction.focusglasses.audio.VoiceCommand
 import com.junction.focusglasses.audio.VoiceCommands
+import com.junction.focusglasses.cooking.CookingEngine
 import com.junction.focusglasses.focus.FocusEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +45,7 @@ sealed interface ModeCommand {
 class ModeController(
     private val scope: CoroutineScope,
     private val work: FocusEngine,
+    private val cooking: CookingEngine,
     private val commands: VoiceCommands,
 ) {
   private companion object {
@@ -104,14 +106,22 @@ class ModeController(
   private fun resume() {
     val mode = _ui.value.activeMode ?: return
     if (currentStatus() != ModeStatus.PAUSED) return
-    if (mode == FocusMode.WORK) work.resume()
+    when (mode) {
+      FocusMode.WORK -> work.resume()
+      FocusMode.COOKING -> cooking.resume()
+      else -> Unit
+    }
     _ui.update { it.copy(statuses = it.statuses + (mode to ModeStatus.ACTIVE), lastAction = "${mode.title} mode resumed.") }
     Log.i(TAG, "resumed $mode")
   }
 
   private fun end() {
     val mode = _ui.value.activeMode ?: return
-    if (mode == FocusMode.WORK) work.stop()
+    when (mode) {
+      FocusMode.WORK -> work.stop()
+      FocusMode.COOKING -> cooking.stop()
+      else -> Unit
+    }
     _ui.update {
       it.copy(
           activeMode = null,
@@ -129,7 +139,11 @@ class ModeController(
   }
 
   private fun suspendMode(mode: FocusMode) {
-    if (mode == FocusMode.WORK) work.pause()
+    when (mode) {
+      FocusMode.WORK -> work.pause()
+      FocusMode.COOKING -> cooking.pause()
+      else -> Unit
+    }
     _ui.update { it.copy(statuses = it.statuses + (mode to ModeStatus.PAUSED)) }
   }
 
@@ -137,8 +151,10 @@ class ModeController(
       _ui.value.activeMode?.let { _ui.value.statuses.getValue(it) } ?: ModeStatus.INACTIVE
 
   private fun startMode(mode: FocusMode) {
-    if (mode == FocusMode.WORK) {
-      if (work.isPaused) work.resume() else if (!work.isRunning) work.start()
+    when (mode) {
+      FocusMode.WORK -> if (work.isPaused) work.resume() else if (!work.isRunning) work.start()
+      FocusMode.COOKING -> cooking.start()
+      else -> Unit
     }
   }
 
