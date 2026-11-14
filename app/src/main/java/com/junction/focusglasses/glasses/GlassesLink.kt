@@ -101,6 +101,29 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
   /** Head pitch from the glasses IMU (elevation of the camera's forward axis, degrees). */
   val pitch: SharedFlow<PitchSample> = _pitch.asSharedFlow()
 
+  private class RawFrame(val data: ByteArray, val width: Int, val height: Int)
+
+  @Volatile private var latestRaw: RawFrame? = null
+  private var layoutLogged = false
+
+  /**
+   * The latest glasses frame in color (half resolution), for Gemini. Detection keeps using the
+   * grayscale [frames]. A copy is saved to cache/last_snapshot.jpg for debugging.
+   */
+  fun colorSnapshot(): Bitmap? {
+    val raw = latestRaw ?: return null
+    val bitmap = FrameConverter.toColorBitmap(raw.data, raw.width, raw.height) ?: return null
+    if (!layoutLogged) {
+      layoutLogged = true
+      val semi = FrameConverter.isSemiPlanar(raw.data, raw.width * raw.height, raw.width * raw.height / 4)
+      Log.i(TAG, "color snapshot ${raw.width}x${raw.height}, ${raw.data.size} bytes, chroma ${if (semi) "NV12" else "I420"}")
+    }
+    runCatching {
+      java.io.File(context.cacheDir, "last_snapshot.jpg").outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+    }
+    return bitmap
+  }
+
   /** Keeps top-level mode navigation outside the camera and motion pipelines. */
   fun bindModeController(controller: ModeController) {
     modeController = controller
@@ -344,6 +367,8 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                   lastFrameProcessedAt = now
                   if (frame.isCompressed) return@collect
                   FrameConverter.toGrayBitmap(frame.buffer, frame.width, frame.height)?.let { _frames.tryEmit(it) }
+                  val raw = frame.buffer.duplicate()
+                  latestRaw = RawFrame(ByteArray(raw.remaining()).also { raw.get(it) }, frame.width, frame.height)
                 }
               }
               sessionJobs += scope.launch {

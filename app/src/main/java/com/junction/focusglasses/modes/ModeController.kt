@@ -179,6 +179,10 @@ class ModeController(
       VoiceCommand.END_WORK, VoiceCommand.END_MODE -> dispatch(ModeCommand.End)
       VoiceCommand.YES -> if (_ui.value.activeMode == FocusMode.WORK) work.takeBreak()
       VoiceCommand.NOT_YET -> if (_ui.value.activeMode == FocusMode.WORK) work.extendFocus()
+      VoiceCommand.COOK_IDEA -> if (_ui.value.activeMode == FocusMode.COOKING) cooking.analyzeCurrentView()
+      VoiceCommand.COOK_TIMER ->
+          if (_ui.value.activeMode == FocusMode.COOKING) cooking.startTimer(VoiceCommands.parseMinutes(commands.heard.value) ?: 10, announce = true)
+      VoiceCommand.MEAL_DONE -> if (_ui.value.activeMode == FocusMode.COOKING) cooking.mealFinished()
     }
   }
 }

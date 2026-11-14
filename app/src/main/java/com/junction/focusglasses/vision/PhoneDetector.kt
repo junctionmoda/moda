@@ -33,6 +33,12 @@ class PhoneDetector(context: Context) {
     private val SCREEN_LABELS = setOf("laptop", "tv")
     private const val SCREEN_MIN_SCORE = 0.4f
     private const val BOOK_MIN_SCORE = 0.35f
+    /**
+     * Centre crop (fraction of width / height) checked again for phones. A phone held up in front
+     * of a laptop is small in the wide glasses view and scores only 0.3-0.5 on the full frame;
+     * zoomed in, the model sees it at twice the size.
+     */
+    private const val CENTER_CROP = 0.55f
   }
 
   private val detector: ObjectDetector? =
@@ -53,6 +59,27 @@ class PhoneDetector(context: Context) {
       }
 
   val isReady: Boolean get() = detector != null
+
+  /** Phone detection on the centre crop; the box is mapped back to full-frame coordinates. */
+  private fun detectPhoneInCenter(d: ObjectDetector, bitmap: Bitmap): PhoneDetection? {
+    val w = bitmap.width
+    val h = bitmap.height
+    val cw = (w * CENTER_CROP).toInt()
+    val ch = (h * CENTER_CROP).toInt()
+    val x0 = (w - cw) / 2
+    val y0 = (h - ch) / 2
+    val crop = Bitmap.createBitmap(bitmap, x0, y0, cw, ch)
+    val result = d.detect(BitmapImageBuilder(crop).build())
+    var best: PhoneDetection? = null
+    for (det in result.detections()) {
+      val cat = det.categories().maxByOrNull { it.score() } ?: continue
+      if (cat.categoryName() != "cell phone") continue
+      if (best != null && cat.score() <= best.score) continue
+      val b = det.boundingBox()
+      best = PhoneDetection(cat.score(), RectF(b.left + x0, b.top + y0, b.right + x0, b.bottom + y0), w, h)
+    }
+    return best
+  }
 
   @Synchronized
   fun detect(bitmap: Bitmap): FrameDetections {
@@ -82,6 +109,8 @@ class PhoneDetector(context: Context) {
           }
         }
       }
+      val zoomed = detectPhoneInCenter(d, bitmap)
+      if (zoomed != null && zoomed.score > phone.score) phone = zoomed
       FrameDetections(phone, screen, book)
     } catch (t: Throwable) {
       Log.e("FocusGlasses:Detector", "detect failed", t)

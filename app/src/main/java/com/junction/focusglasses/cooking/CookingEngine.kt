@@ -2,6 +2,7 @@ package com.junction.focusglasses.cooking
 
 import android.content.Context
 import android.util.Log
+import com.junction.focusglasses.ai.FocusLive
 import com.junction.focusglasses.ai.GeminiClient
 import com.junction.focusglasses.audio.Voice
 import com.junction.focusglasses.data.SettingsStore
@@ -38,6 +39,7 @@ class CookingEngine(
     private val link: GlassesLink,
     private val settings: SettingsStore,
     private val voice: Voice,
+    private val live: FocusLive,
 ) {
   private companion object { const val TAG = "FocusGlasses:Cooking" }
 
@@ -50,7 +52,10 @@ class CookingEngine(
     if (_ui.value.phase == CookingPhase.PAUSED) { resume(); return }
     if (_ui.value.phase != CookingPhase.IDLE) return
     _ui.value = CookingUi(phase = CookingPhase.PLANNING, advice = "Cooking Mode ready. Open the fridge, then ask for a current-view suggestion.")
-    voice.say("Cooking mode is ready. I can help with a timer and a meal reminder.")
+    speak(
+        "cooking_started: Cooking mode is on. Offer hands-free timers and ideas from what they see. One sentence.",
+        "Cooking mode is on. Say what can I cook, or set a ten minute timer.",
+    )
     Log.i(TAG, "started")
   }
 
@@ -81,19 +86,31 @@ class CookingEngine(
     _ui.update {
       it.copy(advice = "Fridge check: choose one protein, two vegetables, and a staple. Analyze the current view for a tailored idea; add low items to your shopping list manually.")
     }
-    voice.say("Choose a protein, two vegetables, and a staple. You can analyze the current view for an idea.")
+    speak(
+        "fridge_opened: suggest picking a protein, two vegetables and a staple; offer to look at the fridge.",
+        "Choose a protein, two vegetables, and a staple. You can analyze the current view for an idea.",
+    )
   }
 
   fun analyzeCurrentView() {
     if (_ui.value.analyzing) return
     val currentSettings = settings.current
+    val snapshot = link.colorSnapshot()
+    if (live.isReady && snapshot != null) {
+      // Focus Live sees the color frame and answers out loud; no separate request needed.
+      live.image(snapshot)
+      live.event("cooking_look: the user wants an idea from this view. Name the visible ingredients and give one short meal idea.")
+      _ui.update { it.copy(advice = "Focus Live is looking at the current view…") }
+      return
+    }
     if (currentSettings.geminiKey.isBlank()) {
       _ui.update { it.copy(advice = "Add a Gemini API key in Settings before sending a one-time camera frame for analysis.") }
       return
     }
     _ui.update { it.copy(analyzing = true, advice = "Analyzing one current glasses frame…") }
+    voice.say("Let me take a look.")
     scope.launch {
-      val frame = withTimeoutOrNull(8_000) { link.frames.first() }
+      val frame = snapshot ?: withTimeoutOrNull(8_000) { link.frames.first() }
       val suggestion = frame?.let { GeminiClient.describeCookingFrame(it, currentSettings.geminiKey, currentSettings.geminiModel) }
       _ui.update {
         it.copy(
@@ -101,12 +118,28 @@ class CookingEngine(
             advice = suggestion ?: "No useful frame suggestion yet. Check the food and heat yourself, then try again with a clearer view.",
         )
       }
+      Log.i(TAG, "view suggestion: ${suggestion ?: "none"}")
+      voice.say(suggestion ?: "Sorry, I couldn't get a suggestion. Try again with a clearer view.")
     }
   }
 
-  fun startTenMinuteTimer() {
-    _ui.update { it.copy(phase = CookingPhase.COOKING, advice = "Ten-minute cooking timer started. Check heat and food safety yourself.") }
-    runTimer(10 * 60)
+  fun startTenMinuteTimer() = startTimer(10)
+
+  /** Starts (or restarts) the cooking timer; returns the minutes set. */
+  fun startTimer(minutes: Int, announce: Boolean = false): Int {
+    val m = minutes.coerceIn(1, 180)
+    timerMinutes = m
+    _ui.update { it.copy(phase = CookingPhase.COOKING, advice = "$m-minute cooking timer started. Check heat and food safety yourself.") }
+    runTimer(m * 60)
+    Log.i(TAG, "timer $m min")
+    if (announce) speak("cooking_timer_started: a $m-minute timer is running. One short sentence.", "Okay, $m minute timer started.")
+    return m
+  }
+
+  private var timerMinutes = 10
+
+  private fun speak(event: String, fallback: String) {
+    if (live.isReady) live.event(event) else voice.say(fallback)
   }
 
   private fun runTimer(initialSeconds: Int) {
@@ -121,7 +154,10 @@ class CookingEngine(
       }
       if (left == 0) {
         _ui.update { it.copy(timerRemainingSec = null, advice = "Timer finished. Check the food visually and with a food thermometer when appropriate.") }
-        voice.say("Your cooking timer is finished. Please check the food before serving.")
+        speak(
+            "cooking_timer_done: the $timerMinutes-minute timer finished. Remind them to check the food.",
+            "Your cooking timer is finished. Please check the food before serving.",
+        )
       }
     }
   }
@@ -138,6 +174,9 @@ class CookingEngine(
           advice = "Meal finished. A dishes reminder is scheduled in ${if (settings.current.demoMode) "one minute (demo)" else "about one hour"}.",
         )
     }
-    voice.say("Enjoy your meal. I will remind you about the dishes later.")
+    speak(
+        "meal_finished: wish them a nice meal; a dishes reminder is set for later.",
+        "Enjoy your meal. I will remind you about the dishes later.",
+    )
   }
 }

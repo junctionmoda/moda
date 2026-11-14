@@ -31,6 +31,11 @@ enum class VoiceCommand {
   END_MODE,
   YES,
   NOT_YET,
+  /** Cooking: "what can I cook" / "what do you see". */
+  COOK_IDEA,
+  /** Cooking: "set a ten minute timer"; minutes come from [VoiceCommands.parseMinutes]. */
+  COOK_TIMER,
+  MEAL_DONE,
 }
 
 /**
@@ -45,35 +50,61 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
   companion object {
     private const val TAG = "FocusGlasses:Commands"
     private const val SAMPLE_RATE = 16_000f
-    private val PHRASES =
-        listOf(
-            "start work mode", "start study mode", "start cooking mode", "start relax mode",
-            "end work mode", "stop work mode", "finish work mode", "end mode",
-            "pause mode", "resume mode", "next mode", "previous mode",
-            "yes", "yes please", "sure", "okay", "take a break", "yes take a break", "i need a break",
-            "no", "not yet", "no thanks", "not now", "keep going", "more time", "give me more time",
-            "i want to finish this", "i want to finish this part", "not yet i want to finish this part",
-            "[unk]",
+    private val MODES = listOf("work", "study", "cooking", "relax")
+    private val NUMBERS =
+        mapOf(
+            "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5, "six" to 6, "seven" to 7, "eight" to 8,
+            "nine" to 9, "ten" to 10, "twelve" to 12, "fifteen" to 15, "twenty" to 20, "twenty five" to 25,
+            "thirty" to 30, "forty" to 40, "forty five" to 45, "sixty" to 60,
         )
+    private val PHRASES =
+        MODES.flatMap { m ->
+          listOf("$m mode", "start $m mode", "open $m mode", "switch to $m mode", "end $m mode", "stop $m mode", "exit $m mode")
+        } +
+            listOf(
+                "finish work mode", "end mode", "stop mode",
+                "pause mode", "resume mode", "next mode", "previous mode",
+                "yes", "yes please", "sure", "okay", "take a break", "yes take a break", "i need a break",
+                "no", "not yet", "no thanks", "not now", "keep going", "more time", "give me more time",
+                "i want to finish this", "i want to finish this part", "not yet i want to finish this part",
+                "what can i cook", "what can i make", "what do you see", "look at this",
+                "start a timer", "set a timer", "start timer",
+                "meal finished", "i finished eating", "i am done eating", "done eating",
+                "[unk]",
+            ) +
+            NUMBERS.keys.flatMap { n -> listOf("set a $n minute timer", "$n minute timer", "$n minutes") }
+
+    /** Minutes named in a timer request ("set a ten minute timer"), or null. */
+    fun parseMinutes(text: String): Int? {
+      val t = " ${text.lowercase()} "
+      return NUMBERS.entries.sortedByDescending { it.key.length }.firstOrNull { " ${it.key} " in t }?.value
+          ?: Regex("""(\d+)""").find(t)?.groupValues?.get(1)?.toIntOrNull()
+    }
 
     /** Maps a recognized utterance to a command; null for anything else. */
     fun parse(text: String): VoiceCommand? {
       val t = " ${text.lowercase().trim()} "
       if (t.isBlank()) return null
-      val workMode = "work mode" in t
+      val t2 = t.replace(".", " ").replace(",", " ")
+      val mode = MODES.firstOrNull { "$it mode" in t2 }
+      val ending = listOf(" end ", " stop ", " finish ", " exit ", " close ", " quit ", " and ").any { it in t2 }
       return when {
-        workMode && (" start " in t) -> VoiceCommand.START_WORK
-        "study mode" in t && ("start" in t || "switch" in t) -> VoiceCommand.START_STUDY
-        "cooking mode" in t && ("start" in t || "switch" in t) -> VoiceCommand.START_COOKING
-        "relax mode" in t && ("start" in t || "switch" in t) -> VoiceCommand.START_RELAX
-        workMode && (" end " in t || " stop " in t || " finish " in t) -> VoiceCommand.END_WORK
-        "pause" in t -> VoiceCommand.PAUSE_MODE
-        "resume" in t || "continue" in t -> VoiceCommand.RESUME_MODE
-        "next mode" in t -> VoiceCommand.NEXT_MODE
-        "previous mode" in t -> VoiceCommand.PREVIOUS_MODE
-        "end mode" in t || "stop mode" in t -> VoiceCommand.END_MODE
-        " not " in t || " no " in t || " finish " in t || "more time" in t || "keep going" in t -> VoiceCommand.NOT_YET
-        " yes " in t || " sure " in t || " okay " in t || " break " in t -> VoiceCommand.YES
+        // Glasses Speech often hears "end" as "and": "And cooking mode."
+        mode != null && ending -> if (mode == "work") VoiceCommand.END_WORK else VoiceCommand.END_MODE
+        mode == "work" -> VoiceCommand.START_WORK
+        mode == "study" -> VoiceCommand.START_STUDY
+        mode == "cooking" -> VoiceCommand.START_COOKING
+        mode == "relax" -> VoiceCommand.START_RELAX
+        "end mode" in t2 || "stop mode" in t2 -> VoiceCommand.END_MODE
+        "pause" in t2 -> VoiceCommand.PAUSE_MODE
+        "resume" in t2 || "continue" in t2 -> VoiceCommand.RESUME_MODE
+        "next mode" in t2 -> VoiceCommand.NEXT_MODE
+        "previous mode" in t2 -> VoiceCommand.PREVIOUS_MODE
+        " timer " in t2 -> VoiceCommand.COOK_TIMER
+        " cook " in t2 || "can i make" in t2 || "do you see" in t2 || "look at this" in t2 -> VoiceCommand.COOK_IDEA
+        "meal finished" in t2 || "done eating" in t2 || "finished eating" in t2 -> VoiceCommand.MEAL_DONE
+        " not " in t2 || " no " in t2 || " finish " in t2 || "more time" in t2 || "keep going" in t2 -> VoiceCommand.NOT_YET
+        " yes " in t2 || " sure " in t2 || " okay " in t2 || " break " in t2 -> VoiceCommand.YES
         else -> null
       }
     }
@@ -91,10 +122,18 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
 
   private var service: SpeechService? = null
   private var starting = false
+  private var model: Model? = null
+  /** While suspended (Focus Live owns the microphone) the recognizer is released. */
+  private var suspended = false
+  private var collectingSpeech = false
 
   /** Loads the model and starts listening. Needs RECORD_AUDIO; safe to call more than once. */
   fun start() {
-    if (service != null || starting) return
+    if (suspended || service != null || starting) return
+    model?.let {
+      onModel(it)
+      return
+    }
     starting = true
     _status.value = "Voice: loading model…"
     StorageService.unpack(
@@ -110,7 +149,29 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
     )
   }
 
+  /** Releases the microphone for Focus Live, or takes it back. */
+  fun setSuspended(value: Boolean) {
+    if (suspended == value) return
+    suspended = value
+    if (value) {
+      service?.let {
+        it.stop()
+        it.shutdown()
+      }
+      service = null
+      _status.value = "Voice: handled by Focus Live"
+      Log.i(TAG, "suspended")
+    } else {
+      start()
+    }
+  }
+
   private fun onModel(model: Model) {
+    this.model = model
+    if (suspended) {
+      starting = false
+      return
+    }
     try {
       val grammar = PHRASES.joinToString(",", "[", "]") { "\"$it\"" }
       val recognizer = Recognizer(model, SAMPLE_RATE, grammar)
@@ -120,13 +181,16 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
       _status.value = "Voice: listening"
       Log.i(TAG, "listening")
       // Don't listen to ourselves.
-      scope.launch {
-        voice.speaking.collect { speaking ->
-          if (speaking) {
-            s.setPause(true)
-          } else {
-            delay(400)
-            if (!voice.speaking.value) s.setPause(false)
+      if (!collectingSpeech) {
+        collectingSpeech = true
+        scope.launch {
+          voice.speaking.collect { speaking ->
+            if (speaking) {
+              service?.setPause(true)
+            } else {
+              delay(400)
+              if (!voice.speaking.value) service?.setPause(false)
+            }
           }
         }
       }

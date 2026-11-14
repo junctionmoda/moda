@@ -159,7 +159,10 @@ class MainActivity : ComponentActivity() {
       graph.link.onWearablesInitialized()
     }
     // Voice commands: offline recognizer on the phone mic.
-    if (granted(Manifest.permission.RECORD_AUDIO)) graph.commands.start()
+    if (granted(Manifest.permission.RECORD_AUDIO)) {
+      graph.commands.start()
+      graph.micGranted = true // also connects Focus Live when enabled
+    }
   }
 }
 
@@ -206,6 +209,7 @@ private fun AppScreen(
 
       ConnectionSection(graph, link, onRegister, onUnregister, onRequestGlassesCamera, onRequestGlassesVoice)
       ModeSection(graph, modes)
+      VoiceSection(graph, settings.liveOn)
       if (modes.activeMode == FocusMode.COOKING) CookingSection(graph, cooking, link)
       if (modes.activeMode == FocusMode.MEETING) MeetingSection(graph, meeting)
       FocusSection(graph, ui, link, modes)
@@ -293,6 +297,26 @@ private fun ConnectionSection(
     }
     OutlinedButton(onClick = onRequestGlassesVoice, enabled = link.phase != LinkPhase.IDLE) {
       Text("Enable glasses mode voice")
+    }
+  }
+}
+
+/** Focus Live and offline voice status, shown in every mode. */
+@Composable
+private fun VoiceSection(graph: AppGraph, liveOn: Boolean) {
+  val state by graph.live.state.collectAsState()
+  val status by graph.live.status.collectAsState()
+  val transcript by graph.live.transcript.collectAsState()
+  val voiceStatus by graph.commands.status.collectAsState()
+  val heard by graph.commands.heard.collectAsState()
+  Section("Voice") {
+    if (liveOn) Text(status, color = if (state == com.junction.focusglasses.ai.LiveState.ERROR) Warn else Muted, fontSize = 13.sp)
+    if (transcript.isNotBlank()) Text(transcript, color = TextMain, fontSize = 13.sp)
+    if (state != com.junction.focusglasses.ai.LiveState.READY) {
+      Text(voiceStatus + (if (heard.isNotBlank()) " · heard \"$heard\"" else ""), color = Muted, fontSize = 12.sp)
+    }
+    if (liveOn && (state == com.junction.focusglasses.ai.LiveState.ERROR || state == com.junction.focusglasses.ai.LiveState.OFF)) {
+      OutlinedButton(onClick = { graph.reconnectLive() }) { Text("Reconnect Focus Live") }
     }
   }
 }
@@ -428,14 +452,6 @@ private fun FocusSection(graph: AppGraph, ui: FocusUi, link: LinkStatus, modes: 
           fontSize = 13.sp,
       )
     }
-    val voiceStatus by graph.commands.status.collectAsState()
-    val heard by graph.commands.heard.collectAsState()
-    Text(
-        voiceStatus + (if (heard.isNotBlank()) " · heard \"$heard\"" else "") +
-            (if (ui.phase == FocusPhase.IDLE) " · say \"Start Work Mode\"" else ""),
-        color = Muted,
-        fontSize = 12.sp,
-    )
     if (link.phase != LinkPhase.STREAMING && ui.phase == FocusPhase.IDLE) {
       Text("Tip: you can start without the glasses, just without phone detection and glasses posture.", color = Muted, fontSize = 12.sp)
     }
@@ -598,6 +614,17 @@ private fun SettingsSection(graph: AppGraph, s: com.junction.focusglasses.data.S
     Slider(value = s.closeRatio, onValueChange = { v -> store.update { it.copy(closeRatio = v) } }, valueRange = 1.1f..1.8f)
 
     HorizontalDivider(color = Color(0xFF2B3833))
+    LabeledSwitch("Focus Live (Gemini voice coach, needs the Gemini key below)", s.liveOn) { v -> store.update { it.copy(liveOn = v) } }
+    if (s.liveOn) {
+      Text("Live voice: ${s.liveVoice}", color = Muted, fontSize = 13.sp)
+      Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        listOf("Achernar" to "soft", "Sulafat" to "warm", "Vindemiatrix" to "gentle", "Aoede" to "breezy").forEach { (name, feel) ->
+          TextButton(onClick = { store.update { it.copy(liveVoice = name) } }) {
+            Text("$name\n$feel", color = if (name == s.liveVoice) TextMain else Muted, fontSize = 12.sp)
+          }
+        }
+      }
+    }
     VoicePicker(graph, s)
     Text("Gemini (optional): recognizes your task at the start", color = Muted, fontSize = 13.sp)
     var key by remember { mutableStateOf(s.geminiKey) }
