@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
 import com.junction.focusglasses.audio.Voice
+import com.junction.focusglasses.ai.GeminiClient
+import com.junction.focusglasses.data.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,7 +27,7 @@ data class MeetingUi(
 )
 
 /** Local-calendar meeting check-in and local note store for the hackathon demo. */
-class MeetingEngine(private val context: Context, private val scope: CoroutineScope, private val voice: Voice) {
+class MeetingEngine(private val context: Context, private val scope: CoroutineScope, private val voice: Voice, private val settings: SettingsStore) {
   private val _ui = MutableStateFlow(MeetingUi())
   val ui: StateFlow<MeetingUi> = _ui.asStateFlow()
   private val prefs = context.getSharedPreferences("meeting_notes", Context.MODE_PRIVATE)
@@ -72,6 +74,36 @@ class MeetingEngine(private val context: Context, private val scope: CoroutineSc
     _ui.update { it.copy(notes = all, message = "Action item saved locally.") }
   }
   fun finish() { _ui.update { it.copy(phase = MeetingPhase.FINISHED, message = "Meeting saved locally. ${it.notes.size} action item(s) recorded.") } }
+
+  /** Routes a final Speech transcript through Gemini when configured; falls back locally. */
+  fun handleNaturalLanguage(text: String) {
+    scope.launch {
+      val s = settings.current
+      val intent = GeminiClient.classifyMeetingIntent(text, s.geminiKey, s.geminiModel) ?: localIntent(text)
+      when {
+        intent.contains("started") -> started()
+        intent.contains("delayed") -> delayed()
+        intent.contains("skipped") -> skip()
+        intent.contains("consent_recording") -> confirmConsent(true)
+        intent.contains("notes_only") -> confirmConsent(false)
+        intent.contains("action_item") -> addActionItem(text)
+        else -> _ui.update { it.copy(message = "I did not understand that meeting reply. Try: started, delayed, record with consent, or notes only.") }
+      }
+    }
+  }
+
+  private fun localIntent(text: String): String {
+    val t = text.lowercase()
+    return when {
+      "start" in t || "开始" in t -> "started"
+      "delay" in t || "late" in t || "延" in t -> "delayed"
+      "skip" in t || "取消" in t -> "skipped"
+      "record" in t || "录音" in t || "同意" in t -> "consent_recording"
+      "note" in t || "不录" in t -> "notes_only"
+      "action" in t || "行动" in t || "决定" in t -> "action_item"
+      else -> "unknown"
+    }
+  }
 
   private fun nextEvent(now: Long): CalendarMeeting? {
     val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().appendPath((now - 5 * 60_000).toString()).appendPath((now + 24 * 60 * 60_000).toString()).build()

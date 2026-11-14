@@ -29,7 +29,7 @@ class AppGraph(app: Application) {
   val link = GlassesLink(app, scope)
   val engine = FocusEngine(app, scope, link, settings, stats, ambient, voice, dnd)
   val cooking = CookingEngine(app, scope, link, settings, voice)
-  val meeting = MeetingEngine(app, scope, voice)
+  val meeting = MeetingEngine(app, scope, voice, settings)
   val modes = ModeController(scope, engine, cooking, meeting, commands)
   init {
     link.bindModeController(modes)

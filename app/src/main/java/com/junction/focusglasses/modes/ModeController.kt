@@ -64,7 +64,8 @@ class ModeController(
 
   /** DAT Speech forwards only final transcripts here; partial text never changes mode state. */
   fun submitGlassesTranscript(transcript: String) {
-    commands.submitFinalTranscript(transcript, source = "glasses")
+    if (_ui.value.activeMode == FocusMode.MEETING) meeting.handleNaturalLanguage(transcript)
+    else commands.submitFinalTranscript(transcript, source = "glasses")
   }
 
   fun dispatch(command: ModeCommand) {

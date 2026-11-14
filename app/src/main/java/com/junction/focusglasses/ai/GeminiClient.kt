@@ -114,4 +114,20 @@ object GeminiClient {
           null
         }
       }
+
+  /** Text-only intent classification; no meeting audio or calendar content is sent. */
+  suspend fun classifyMeetingIntent(text: String, apiKey: String, model: String): String? =
+      withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext null
+        try {
+          val prompt = "Classify this meeting reply as exactly one token: started, delayed, skipped, consent_recording, notes_only, action_item, or unknown. Reply with the token only. Reply: $text"
+          val body = JSONObject().put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+          val conn = (URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent").openConnection() as HttpURLConnection)
+          conn.requestMethod = "POST"; conn.connectTimeout = 8000; conn.readTimeout = 15000; conn.doOutput = true
+          conn.setRequestProperty("Content-Type", "application/json"); conn.setRequestProperty("x-goog-api-key", apiKey)
+          conn.outputStream.use { it.write(body.toString().toByteArray()) }
+          if (conn.responseCode !in 200..299) return@withContext null
+          JSONObject(conn.inputStream.bufferedReader().readText()).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text").trim().lowercase()
+        } catch (t: Throwable) { Log.w(TAG, "classifyMeetingIntent failed", t); null }
+      }
 }
