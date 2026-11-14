@@ -2,6 +2,8 @@
 
 Junction 2026 · Meta AI glasses focus companion. One Android app on the phone; Ray-Ban Meta (Gen 2) glasses connect through the Meta Wearables Device Access Toolkit (DAT) 1.0.1.
 
+[中文说明](README_zh.md)
+
 English UI and voice. This is a multi-mode Ray-Ban Meta companion; Work is the most complete mode.
 
 ## What works now
