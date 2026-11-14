@@ -78,6 +78,8 @@ import com.junction.focusglasses.modes.ModeStatus
 import com.junction.focusglasses.modes.ModeUi
 import com.junction.focusglasses.cooking.CookingPhase
 import com.junction.focusglasses.cooking.CookingUi
+import com.junction.focusglasses.meeting.MeetingPhase
+import com.junction.focusglasses.meeting.MeetingUi
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
@@ -94,6 +96,7 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.BLUETOOTH_CONNECT)
             add(Manifest.permission.CAMERA)
             add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.READ_CALENDAR)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
           }
           .toTypedArray()
@@ -184,6 +187,7 @@ private fun AppScreen(
   val stats by graph.stats.stats.collectAsState()
   val modes by graph.modes.ui.collectAsState()
   val cooking by graph.cooking.ui.collectAsState()
+  val meeting by graph.meeting.ui.collectAsState()
 
   Box(Modifier.fillMaxSize()) {
     Column(
@@ -203,6 +207,7 @@ private fun AppScreen(
       ConnectionSection(graph, link, onRegister, onUnregister, onRequestGlassesCamera, onRequestGlassesVoice)
       ModeSection(graph, modes)
       if (modes.activeMode == FocusMode.COOKING) CookingSection(graph, cooking, link)
+      if (modes.activeMode == FocusMode.MEETING) MeetingSection(graph, meeting)
       FocusSection(graph, ui, link, modes)
       StatsSection(stats.todayMinutes, stats.todaySessions, stats.streakDays, ui.summary)
       SensorsSection(ui, debug, link)
@@ -309,6 +314,36 @@ private fun ModeSection(graph: AppGraph, modes: ModeUi) {
       OutlinedButton(onClick = { graph.modes.dispatch(ModeCommand.End) }) { Text("End") }
     }
     Text(modes.lastAction, color = Muted, fontSize = 12.sp)
+  }
+}
+
+@Composable
+private fun MeetingSection(graph: AppGraph, meeting: MeetingUi) {
+  var actionItem by remember { mutableStateOf("") }
+  Section("Meeting Mode") {
+    meeting.meeting?.let { Text(it.title, fontWeight = FontWeight.SemiBold) }
+    Text(meeting.message, color = Muted)
+    when (meeting.phase) {
+      MeetingPhase.SCHEDULED -> Button(onClick = graph.meeting::askNow) { Text("Check meeting now") }
+      MeetingPhase.CHECK_IN -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = graph.meeting::started) { Text("Started") }
+        OutlinedButton(onClick = graph.meeting::delayed) { Text("Delayed") }
+        OutlinedButton(onClick = graph.meeting::skip) { Text("Skip") }
+      }
+      MeetingPhase.CONSENT -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { graph.meeting.confirmConsent(true) }) { Text("Everyone agreed") }
+        OutlinedButton(onClick = { graph.meeting.confirmConsent(false) }) { Text("Notes only") }
+      }
+      MeetingPhase.IN_PROGRESS -> {
+        Text(if (meeting.transcriptConsent) "Consent recorded. Transcript capture is a demo consent state; add action items below." else "Notes-only meeting.", color = Muted, fontSize = 12.sp)
+        OutlinedTextField(value = actionItem, onValueChange = { actionItem = it }, label = { Text("Action item or decision") }, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          Button(onClick = { graph.meeting.addActionItem(actionItem); actionItem = "" }) { Text("Save item") }
+          OutlinedButton(onClick = graph.meeting::finish) { Text("Finish meeting") }
+        }
+      }
+      else -> Unit
+    }
   }
 }
 

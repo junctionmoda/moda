@@ -10,6 +10,7 @@ import com.junction.focusglasses.data.StatsStore
 import com.junction.focusglasses.focus.FocusEngine
 import com.junction.focusglasses.glasses.GlassesLink
 import com.junction.focusglasses.modes.ModeController
+import com.junction.focusglasses.meeting.MeetingEngine
 import com.junction.focusglasses.system.DndController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +29,8 @@ class AppGraph(app: Application) {
   val link = GlassesLink(app, scope)
   val engine = FocusEngine(app, scope, link, settings, stats, ambient, voice, dnd)
   val cooking = CookingEngine(app, scope, link, settings, voice)
-  val modes = ModeController(scope, engine, cooking, commands)
+  val meeting = MeetingEngine(app, scope, voice)
+  val modes = ModeController(scope, engine, cooking, meeting, commands)
   init {
     link.bindModeController(modes)
     scope.launch { settings.settings.collect { voice.setPreferredVoice(it.ttsVoice) } }

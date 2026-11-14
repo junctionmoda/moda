@@ -4,6 +4,7 @@ import android.util.Log
 import com.junction.focusglasses.audio.VoiceCommand
 import com.junction.focusglasses.audio.VoiceCommands
 import com.junction.focusglasses.cooking.CookingEngine
+import com.junction.focusglasses.meeting.MeetingEngine
 import com.junction.focusglasses.focus.FocusEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +19,7 @@ enum class FocusMode(val title: String) {
   STUDY("Study"),
   COOKING("Cooking"),
   RELAX("Relax"),
+  MEETING("Meeting"),
 }
 
 enum class ModeStatus { INACTIVE, ACTIVE, PAUSED, COMPLETED }
@@ -46,6 +48,7 @@ class ModeController(
     private val scope: CoroutineScope,
     private val work: FocusEngine,
     private val cooking: CookingEngine,
+    private val meeting: MeetingEngine,
     private val commands: VoiceCommands,
 ) {
   private companion object {
@@ -109,6 +112,7 @@ class ModeController(
     when (mode) {
       FocusMode.WORK -> work.resume()
       FocusMode.COOKING -> cooking.resume()
+      FocusMode.MEETING -> meeting.resume()
       else -> Unit
     }
     _ui.update { it.copy(statuses = it.statuses + (mode to ModeStatus.ACTIVE), lastAction = "${mode.title} mode resumed.") }
@@ -120,6 +124,7 @@ class ModeController(
     when (mode) {
       FocusMode.WORK -> work.stop()
       FocusMode.COOKING -> cooking.stop()
+      FocusMode.MEETING -> meeting.stop()
       else -> Unit
     }
     _ui.update {
@@ -142,6 +147,7 @@ class ModeController(
     when (mode) {
       FocusMode.WORK -> work.pause()
       FocusMode.COOKING -> cooking.pause()
+      FocusMode.MEETING -> meeting.pause()
       else -> Unit
     }
     _ui.update { it.copy(statuses = it.statuses + (mode to ModeStatus.PAUSED)) }
@@ -154,6 +160,7 @@ class ModeController(
     when (mode) {
       FocusMode.WORK -> if (work.isPaused) work.resume() else if (!work.isRunning) work.start()
       FocusMode.COOKING -> cooking.start()
+      FocusMode.MEETING -> meeting.start()
       else -> Unit
     }
   }
