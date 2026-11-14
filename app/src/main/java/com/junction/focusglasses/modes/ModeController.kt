@@ -16,9 +16,7 @@ import kotlinx.coroutines.launch
 /** The stable app-level boundary: feature teams implement a mode, this class owns switching. */
 enum class FocusMode(val title: String) {
   WORK("Work"),
-  STUDY("Study"),
   COOKING("Cooking"),
-  RELAX("Relax"),
   MEETING("Meeting"),
 }
 
@@ -41,8 +39,7 @@ sealed interface ModeCommand {
 }
 
 /**
- * Work is the first real feature-mode. The remaining modes deliberately expose only lifecycle
- * placeholders until their owning teams attach their own engines here.
+ * Each active mode owns its feature engine; this class owns switching between them.
  */
 class ModeController(
     private val scope: CoroutineScope,
@@ -169,9 +166,8 @@ class ModeController(
   private fun onVoiceCommand(command: VoiceCommand) {
     when (command) {
       VoiceCommand.START_WORK -> dispatch(ModeCommand.Activate(FocusMode.WORK))
-      VoiceCommand.START_STUDY -> dispatch(ModeCommand.Activate(FocusMode.STUDY))
       VoiceCommand.START_COOKING -> dispatch(ModeCommand.Activate(FocusMode.COOKING))
-      VoiceCommand.START_RELAX -> dispatch(ModeCommand.Activate(FocusMode.RELAX))
+      VoiceCommand.START_MEETING -> dispatch(ModeCommand.Activate(FocusMode.MEETING))
       VoiceCommand.PAUSE_MODE -> dispatch(ModeCommand.Pause)
       VoiceCommand.RESUME_MODE -> dispatch(ModeCommand.Resume)
       VoiceCommand.NEXT_MODE -> dispatch(ModeCommand.Next)

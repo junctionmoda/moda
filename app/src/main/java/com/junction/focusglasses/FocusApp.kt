@@ -84,7 +84,7 @@ class AppGraph(app: Application) {
     return when (name) {
       "switch_mode" -> {
         val mode = FocusMode.entries.firstOrNull { it.name.equals(args.optString("mode"), ignoreCase = true) }
-        if (mode == null) JSONObject().put("result", "unknown mode").put("modes", "work, study, cooking, relax, meeting")
+        if (mode == null) JSONObject().put("result", "unknown mode").put("modes", "work, cooking, meeting")
         else {
           modes.dispatch(ModeCommand.Activate(mode))
           JSONObject().put("result", "${mode.title} mode is active").put("paused", active?.takeIf { it != mode }?.title ?: JSONObject.NULL)

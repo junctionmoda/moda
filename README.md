@@ -11,21 +11,19 @@ English UI and voice. This is a multi-mode Ray-Ban Meta companion; Work is the m
 | Area | Current capability |
 |---|---|
 | Glasses link | Meta DAT registration, camera stream, IMU, MockDeviceKit test mode, experimental touch and Speech input |
-| Mode control | Work, Cooking, Meeting, Study and Relax lifecycle; start, pause, resume, end and switch modes |
+| Mode control | Work, Cooking and Meeting lifecycle; start, pause, resume, end and switch modes |
 | Work Mode | Focus timer, calm music, DND, phone/distraction nudges, distance/posture reminders, check-in, focus tree and local stats |
 | Cooking Mode | User-triggered fridge prompt, one-frame optional Gemini suggestion, 10-minute timer and an inexact local dishes reminder |
 | Meeting Mode | Reads the next local Android Calendar event, meeting start/delay/skip check-in, recording-consent prompt and local action items |
 
 ## Honest demo boundaries
 
-- Study and Relax currently have lifecycle shells only; their feature engines are not built yet.
 - Cooking does **not** automatically recognise a fridge, flame, burnt food or food safety. The fridge cue is manual; Gemini analysis sends one frame only after a user action and needs a configured API key.
 - Meeting Mode records consent and local notes. It does **not** continuously record or transcribe a meeting yet, and the calendar check is not a background all-day alarm.
 - Glasses Inputs and Speech are experimental DAT capabilities and require developer approval plus real-device validation. Phone controls and MockDeviceKit validate the app flow, not hardware behaviour.
 
 ## Next
 
-- Add real Study and Relax feature engines.
 - Add explicit-consent meeting audio capture and continuous transcription.
 - Add reliable calendar background reminders and confirmed follow-up tasks.
 - Improve Cooking Mode with opt-in, evidence-based visual assistance; never treat it as a safety system.

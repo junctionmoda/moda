@@ -55,7 +55,6 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
         The app has modes, and you are the voice of all of them:
         - Work: focus blocks with breaks; the app watches for the phone and for leaning too close to the screen.
         - Cooking: hands-free kitchen help with timers and ideas from what the camera sees.
-        - Study and Relax: quiet companionship; keep check-ins rare and gentle.
         - Meeting: calendar meeting reminders; the app handles them, so stay quiet unless asked.
         The app does the timing and watches through the glasses camera.
 
@@ -212,7 +211,7 @@ class FocusLive(private val scope: CoroutineScope, private val ambient: AmbientP
             .put("type", "OBJECT")
             .put(
                 "properties",
-                JSONObject().put("mode", JSONObject().put("type", "STRING").put("enum", JSONArray().put("work").put("study").put("cooking").put("relax").put("meeting"))),
+                JSONObject().put("mode", JSONObject().put("type", "STRING").put("enum", JSONArray().put("work").put("cooking").put("meeting"))),
             )
             .put("required", JSONArray().put("mode"))
     val timerParam =

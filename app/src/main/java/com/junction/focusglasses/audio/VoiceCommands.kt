@@ -20,9 +20,8 @@ import org.vosk.android.StorageService
 
 enum class VoiceCommand {
   START_WORK,
-  START_STUDY,
   START_COOKING,
-  START_RELAX,
+  START_MEETING,
   PAUSE_MODE,
   RESUME_MODE,
   NEXT_MODE,
@@ -50,7 +49,7 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
   companion object {
     private const val TAG = "FocusGlasses:Commands"
     private const val SAMPLE_RATE = 16_000f
-    private val MODES = listOf("work", "study", "cooking", "relax")
+    private val MODES = listOf("work", "cooking", "meeting")
     private val NUMBERS =
         mapOf(
             "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5, "six" to 6, "seven" to 7, "eight" to 8,
@@ -92,9 +91,8 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
         // Glasses Speech often hears "end" as "and": "And cooking mode."
         mode != null && ending -> if (mode == "work") VoiceCommand.END_WORK else VoiceCommand.END_MODE
         mode == "work" -> VoiceCommand.START_WORK
-        mode == "study" -> VoiceCommand.START_STUDY
         mode == "cooking" -> VoiceCommand.START_COOKING
-        mode == "relax" -> VoiceCommand.START_RELAX
+        mode == "meeting" -> VoiceCommand.START_MEETING
         "end mode" in t2 || "stop mode" in t2 -> VoiceCommand.END_MODE
         "pause" in t2 -> VoiceCommand.PAUSE_MODE
         "resume" in t2 || "continue" in t2 -> VoiceCommand.RESUME_MODE
