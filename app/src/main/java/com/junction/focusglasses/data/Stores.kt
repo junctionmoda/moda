@@ -25,18 +25,8 @@ data class Settings(
     /** Screen / book looking this many times bigger than at session start counts as too close. */
     val closeRatio: Float = 1.25f,
     val useDnd: Boolean = true,
-    val geminiKey: String = "",
-    val geminiModel: String = "gemini-3.8-flash",
-    /** Cooking uses Live only when explicitly enabled; one-frame analysis remains the reliable fallback. */
-    val cookingLive: Boolean = false,
-    /** Sends occasional, scene-change-gated cooking frames to Gemini for optional proactive advice. */
-    val cookingProactiveVision: Boolean = false,
     /** TTS voice name; blank = automatic (a soft US voice when available). */
     val ttsVoice: String = "",
-    /** Focus Live: Gemini Live voice coach (needs the Gemini key); falls back to the offline voice. */
-    val liveOn: Boolean = true,
-    val liveModel: String = "gemini-3.8-live",
-    val liveVoice: String = "Achernar",
 ) {
   companion object {
     const val DEMO_SPEED = 20
@@ -78,14 +68,6 @@ class SettingsStore(context: Context) {
         closeRatio = prefs.getFloat("closeRatioV2", d.closeRatio),
         useDnd = prefs.getBoolean("useDnd", d.useDnd),
         ttsVoice = prefs.getString("ttsVoice", d.ttsVoice) ?: "",
-        liveOn = prefs.getBoolean("liveOn", d.liveOn),
-        liveModel = prefs.getString("liveModel", d.liveModel) ?: d.liveModel,
-        liveVoice = prefs.getString("liveVoice", d.liveVoice) ?: d.liveVoice,
-        geminiKey = prefs.getString("geminiKey", d.geminiKey) ?: "",
-        // gemini-2.5-flash is closed to new API users (HTTP 404 "no longer available").
-        geminiModel = (prefs.getString("geminiModel", d.geminiModel) ?: d.geminiModel).let { if (it == "gemini-2.5-flash") d.geminiModel else it },
-        cookingLive = prefs.getBoolean("cookingLive", d.cookingLive),
-        cookingProactiveVision = prefs.getBoolean("cookingProactiveVision", d.cookingProactiveVision),
     )
   }
 
@@ -105,13 +87,6 @@ class SettingsStore(context: Context) {
         .putFloat("closeRatioV2", s.closeRatio)
         .putBoolean("useDnd", s.useDnd)
         .putString("ttsVoice", s.ttsVoice)
-        .putBoolean("liveOn", s.liveOn)
-        .putString("liveModel", s.liveModel)
-        .putString("liveVoice", s.liveVoice)
-        .putString("geminiKey", s.geminiKey)
-        .putString("geminiModel", s.geminiModel)
-        .putBoolean("cookingLive", s.cookingLive)
-        .putBoolean("cookingProactiveVision", s.cookingProactiveVision)
         .apply()
     _settings.value = s
   }

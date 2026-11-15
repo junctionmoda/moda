@@ -4,8 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.SystemClock
 import android.util.Log
-import com.junction.focusglasses.ai.FocusLive
-import com.junction.focusglasses.ai.GeminiClient
 import com.junction.focusglasses.audio.AmbientPlayer
 import com.junction.focusglasses.audio.Voice
 import com.junction.focusglasses.data.SettingsStore
@@ -25,12 +23,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONObject
 
 /** CHECK_IN: a focus block just ended and we asked "Need a break?"; waiting for the answer. */
 enum class FocusPhase { IDLE, FOCUS, CHECK_IN, BREAK, PAUSED }
@@ -91,7 +86,6 @@ class FocusEngine(
     private val ambient: AmbientPlayer,
     private val voice: Voice,
     private val dnd: DndController,
-    private val live: FocusLive,
 ) {
   companion object {
     private const val TAG = "FocusGlasses:Engine"
@@ -190,7 +184,6 @@ class FocusEngine(
 
   // region Session control
 
-  /** [announce] false when Focus Live started it by a tool call: Gemini confirms in its own words. */
   fun start(announce: Boolean = true) {
     if (isRunning) return
     val s = settingsStore.current
@@ -216,8 +209,6 @@ class FocusEngine(
     }
     recalibrate()
     voice.chimeStart()
-    // Let Focus Live see what the user is working on.
-    if (live.isReady) (link.colorSnapshot() ?: _debug.value?.bitmap)?.let { live.image(it) }
     if (announce) {
       speak(
           "session_started: a ${s.focusMinutes}-minute focus block just started. Welcome the user back in one sentence, " +
@@ -232,7 +223,6 @@ class FocusEngine(
         delay(500)
       }
     }
-    if (s.geminiKey.isNotBlank()) labelTaskWithGemini(s.geminiKey, s.geminiModel)
   }
 
   fun stop(announce: Boolean = true) {
@@ -444,15 +434,13 @@ class FocusEngine(
     ambient.setDucked(true)
     _ui.update { it.copy(phase = FocusPhase.CHECK_IN, remainingSec = 0, treeGrowth = 1f) }
     voice.chimeEnd()
-    val viaLive = live.isReady
     speak(
         "block_finished: they just finished ${(phaseFocusMs / 60_000)} minutes of focus. Praise briefly and ask if they need a break.",
         "Nice work, that's ${(phaseFocusMs / 60_000)} minutes. Need a break?",
     )
     checkInJob?.cancel()
     checkInJob = scope.launch {
-      // A spoken conversation with Live takes a little longer than a fixed command.
-      delay(settingsStore.current.checkInTimeoutSeconds * 1000L + if (viaLive) 15_000L else 0L)
+      delay(settingsStore.current.checkInTimeoutSeconds * 1000L)
       if (_ui.value.phase == FocusPhase.CHECK_IN) {
         Log.i(TAG, "check-in: no answer, taking the break")
         takeBreak(recordFeedback = false)
@@ -691,93 +679,6 @@ class FocusEngine(
 
   // endregion
 
-  private fun labelTaskWithGemini(key: String, model: String) {
-    scope.launch {
-      val frame: Bitmap = withTimeoutOrNull(10_000) { link.frames.first() } ?: return@launch
-      val label = GeminiClient.describeTask(frame, key, model) ?: return@launch
-      if (!isRunning) return@launch
-      _ui.update { it.copy(taskLabel = label) }
-      if (!live.isReady) voice.say("Got it, focusing on $label.")
-    }
-  }
+  private fun speak(@Suppress("UNUSED_PARAMETER") event: String, fallback: String) = voice.say(fallback)
 
-  // region Focus Live
-
-  /** Speaks through Focus Live when connected (Gemini words it from [event]); otherwise the fixed [fallback] line. */
-  private fun speak(event: String, fallback: String) {
-    if (live.isReady) live.event("$event | ${statusLine()}") else voice.say(fallback)
-  }
-
-  private fun statusLine(): String {
-    val ui = _ui.value
-    val s = settingsStore.current
-    return listOfNotNull(
-            "phase=${ui.phase.name.lowercase()}",
-            "minutes_into_block=${phaseFocusMs / 60_000}",
-            "block_minutes=${s.focusMinutes}",
-            if (ui.phase == FocusPhase.FOCUS || ui.phase == FocusPhase.BREAK) "minutes_left=${(ui.remainingSec + 59) / 60}" else null,
-            "focused_this_session_min=${ui.sessionFocusedSec / 60}",
-            "distractions=${ui.distractions}",
-            "trees_grown=${ui.treesGrown}",
-            "tree_health=${ui.treeHealth}%",
-            ui.taskLabel?.let { "task=$it" },
-        )
-        .joinToString("; ")
-  }
-
-  /** Function calls from Gemini. Actions don't announce themselves: Gemini confirms from the result. */
-  fun onLiveTool(name: String, args: JSONObject): JSONObject {
-    val r = JSONObject()
-    when (name) {
-      "start_work_mode" ->
-          if (isRunning) {
-            r.put("result", "already running").put("status", statusLine())
-          } else {
-            start(announce = false)
-            r.put("result", "started").put("focus_minutes", settingsStore.current.focusMinutes)
-          }
-      "end_work_mode" ->
-          if (!isRunning) {
-            r.put("result", "not running")
-          } else {
-            stop(announce = false)
-            val ui = _ui.value
-            r.put("result", "ended")
-                .put("minutes_focused", (ui.sessionFocusedSec + 30) / 60)
-                .put("distractions", ui.distractions)
-                .put("trees_grown", ui.treesGrown)
-          }
-      "take_break" ->
-          when (_ui.value.phase) {
-            FocusPhase.CHECK_IN, FocusPhase.FOCUS -> {
-              val early = _ui.value.phase == FocusPhase.FOCUS
-              takeBreak(recordFeedback = !early, announce = false)
-              r.put("result", if (early) "block ended early, break started" else "break started")
-                  .put("break_minutes", settingsStore.current.breakMinutes)
-            }
-            FocusPhase.BREAK -> r.put("result", "already on a break").put("status", statusLine())
-            FocusPhase.PAUSED -> r.put("result", "work mode is paused while another mode is active")
-            FocusPhase.IDLE -> r.put("result", "not in work mode")
-          }
-      "extend_focus" -> {
-        val minutes = if (args.has("minutes")) args.optInt("minutes", settingsStore.current.extendMinutes) else null
-        when (_ui.value.phase) {
-          FocusPhase.CHECK_IN -> {
-            extendFocus(minutes, announce = false)
-            r.put("result", "extended").put("extra_minutes", minutes ?: settingsStore.current.extendMinutes)
-          }
-          FocusPhase.FOCUS -> {
-            val extra = addFocusTime(minutes ?: settingsStore.current.extendMinutes)
-            r.put("result", "added to the current block").put("extra_minutes", extra).put("status", statusLine())
-          }
-          else -> r.put("result", "not in a focus block").put("status", statusLine())
-        }
-      }
-      "get_status" -> r.put("status", if (isRunning) statusLine() else "not in work mode")
-      else -> r.put("error", "unknown tool $name")
-    }
-    return r
-  }
-
-  // endregion
 }

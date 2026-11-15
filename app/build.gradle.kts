@@ -61,8 +61,6 @@ dependencies {
   implementation(libs.mwdat.speech)
   implementation(libs.mediapipe.tasks.vision)
   implementation(libs.vosk.android)
-  implementation("com.squareup.okhttp3:okhttp:4.12.0")
-  implementation("net.java.dev.jna:jna:5.18.1@aar")
 }
 
 // Offline English speech model for the voice commands (Apache 2.0, ~40 MB). Downloaded once into

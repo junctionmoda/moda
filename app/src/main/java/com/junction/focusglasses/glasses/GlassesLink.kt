@@ -35,8 +35,6 @@ import com.meta.wearable.dat.speech.removeSpeech
 import com.meta.wearable.dat.speech.Speech
 import com.meta.wearable.dat.speech.types.SpeechError
 import com.meta.wearable.dat.speech.types.SpeechState
-import com.junction.focusglasses.modes.ModeCommand
-import com.junction.focusglasses.modes.ModeController
 import com.junction.focusglasses.vision.FrameConverter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,7 +70,7 @@ data class LinkStatus(
     /** Link / compatibility / worn / hinge / battery of the paired glasses, as the SDK reports. */
     val deviceInfo: String? = null,
     /** Experimental DAT Inputs / Speech status; independent from camera and IMU state. */
-    val modeControlsStatus: String = "Mode controls: connect glasses to enable",
+    val modeControlsStatus: String = "Controls: connect glasses to enable",
 )
 
 /** Head-pitch sample in degrees, plus where it came from. */
@@ -105,32 +103,11 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
   /** Head pitch from the glasses IMU (elevation of the camera's forward axis, degrees). */
   val pitch: SharedFlow<PitchSample> = _pitch.asSharedFlow()
 
-  private class RawFrame(val data: ByteArray, val width: Int, val height: Int)
-
-  @Volatile private var latestRaw: RawFrame? = null
-  private var layoutLogged = false
-
-  /**
-   * The latest glasses frame in color (half resolution), for Gemini. Detection keeps using the
-   * grayscale [frames]. A copy is saved to cache/last_snapshot.jpg for debugging.
-   */
-  fun colorSnapshot(): Bitmap? {
-    val raw = latestRaw ?: return null
-    val bitmap = FrameConverter.toColorBitmap(raw.data, raw.width, raw.height) ?: return null
-    if (!layoutLogged) {
-      layoutLogged = true
-      val semi = FrameConverter.isSemiPlanar(raw.data, raw.width * raw.height, raw.width * raw.height / 4)
-      Log.i(TAG, "color snapshot ${raw.width}x${raw.height}, ${raw.data.size} bytes, chroma ${if (semi) "NV12" else "I420"}")
-    }
-    runCatching {
-      java.io.File(context.cacheDir, "last_snapshot.jpg").outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 85, it) }
-    }
-    return bitmap
-  }
-
-  /** Keeps top-level mode navigation outside the camera and motion pipelines. */
-  fun bindModeController(controller: ModeController) {
-    modeController = controller
+  /** Keeps optional glasses controls outside the camera and motion pipelines. */
+  fun bindFocusControls(onTogglePause: () -> Unit, onEnd: () -> Unit, onTranscript: (String) -> Unit) {
+    toggleFocus = onTogglePause
+    endFocus = onEnd
+    transcriptHandler = onTranscript
   }
 
   /** A partial transcription means the wearer has started talking and should take priority. */
@@ -154,7 +131,9 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
   private var camera: Camera? = null
   private var motion: Motion? = null
   private var mockGlasses: MockGlasses? = null
-  private var modeController: ModeController? = null
+  private var toggleFocus: (() -> Unit)? = null
+  private var endFocus: (() -> Unit)? = null
+  private var transcriptHandler: ((String) -> Unit)? = null
   private var inputsAttached = false
   private var speechRequested = false
   private var speechAttached = false
@@ -315,26 +294,20 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     current.addInputs(InputsConfiguration(consumeBack = true)).fold(
         onSuccess = { inputs ->
           inputsAttached = true
-          _status.update { it.copy(modeControlsStatus = "Mode touch: ready") }
+          _status.update { it.copy(modeControlsStatus = "Controls: touch ready") }
           sessionJobs += scope.launch {
             inputs.events.collect { event ->
               when (event) {
-                is InputEvent.Nav -> {
-                  val command =
-                      if (event.direction.toString().contains("LEFT")) ModeCommand.Previous
-                      else ModeCommand.Next
-                  modeController?.dispatch(command)
-                }
-                is InputEvent.Select, is InputEvent.Button -> modeController?.dispatch(ModeCommand.TogglePause)
-                is InputEvent.Back -> modeController?.dispatch(ModeCommand.End)
+                is InputEvent.Select, is InputEvent.Button -> toggleFocus?.invoke()
+                is InputEvent.Back -> endFocus?.invoke()
                 else -> Unit
               }
             }
           }
         },
         onFailure = { error, _ ->
-          _status.update { it.copy(modeControlsStatus = "Mode touch unavailable: ${error.description}") }
-          Log.w(TAG, "mode inputs unavailable: ${error.description}")
+          _status.update { it.copy(modeControlsStatus = "Controls unavailable: ${error.description}") }
+          Log.w(TAG, "controls unavailable: ${error.description}")
         },
     )
   }
@@ -346,17 +319,17 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
           speechAttached = true
           activeSpeech = speech
           speechHasStarted = false
-          _status.update { it.copy(modeControlsStatus = "Mode voice: starting") }
+          _status.update { it.copy(modeControlsStatus = "Glasses voice: starting") }
           sessionJobs += scope.launch {
             speech.transcriptions.collect { transcript ->
               val text = transcript?.text?.trim().orEmpty()
               if (text.isNotEmpty()) {
                 // Do this for partials too: it stops output before the final command arrives.
                 onUserSpeech?.invoke()
-                _status.update { it.copy(modeControlsStatus = if (transcript?.isFinal == true) "Mode voice: heard command" else "Mode voice: hearing…") }
+                _status.update { it.copy(modeControlsStatus = if (transcript?.isFinal == true) "Glasses voice: heard command" else "Glasses voice: hearing…") }
               }
               if (transcript?.isFinal == true && text.isNotEmpty()) {
-                modeController?.submitGlassesTranscript(text)
+                transcriptHandler?.invoke(text)
               }
             }
           }
@@ -366,7 +339,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
               when (state) {
                 SpeechState.STARTED -> {
                   speechHasStarted = true
-                  _status.update { it.copy(modeControlsStatus = "Mode voice: listening") }
+                  _status.update { it.copy(modeControlsStatus = "Glasses voice: listening") }
                 }
                 // The initial STOPPED is normal. A later STOPPED commonly follows a capability
                 // crossing, so restart the existing recognizer instead of silently going deaf.
@@ -380,21 +353,21 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
               if (error == null) return@collect
               Log.w(TAG, "mode speech error: ${error.description}")
               if (error == SpeechError.UNAVAILABLE) {
-                _status.update { it.copy(modeControlsStatus = "Mode voice unavailable on these glasses") }
+                _status.update { it.copy(modeControlsStatus = "Glasses voice unavailable on these glasses") }
               } else {
-                _status.update { it.copy(modeControlsStatus = "Mode voice reconnecting…") }
+                _status.update { it.copy(modeControlsStatus = "Glasses voice reconnecting…") }
                 restartSpeech(current)
               }
             }
           }
           speech.start().onFailure { error, _ ->
-            _status.update { it.copy(modeControlsStatus = "Mode voice unavailable: ${error.description}") }
+            _status.update { it.copy(modeControlsStatus = "Glasses voice unavailable: ${error.description}") }
             restartSpeech(current)
           }
         },
         onFailure = { error, _ ->
-          _status.update { it.copy(modeControlsStatus = "Mode voice unavailable: ${error.description}") }
-          Log.w(TAG, "mode speech unavailable: ${error.description}")
+          _status.update { it.copy(modeControlsStatus = "Glasses voice unavailable: ${error.description}") }
+          Log.w(TAG, "glasses speech unavailable: ${error.description}")
         },
     )
   }
@@ -414,7 +387,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
             if (speech.state.value != SpeechState.STOPPED) return@launch
           }
           if (session === current && activeSpeech?.state?.value == SpeechState.STOPPED) {
-            _status.update { it.copy(modeControlsStatus = "Mode voice stopped — tap Enable mode speech to retry") }
+            _status.update { it.copy(modeControlsStatus = "Glasses voice stopped — tap Enable glasses voice to retry") }
           }
         }
   }
@@ -436,8 +409,6 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                   lastFrameProcessedAt = now
                   if (frame.isCompressed) return@collect
                   FrameConverter.toGrayBitmap(frame.buffer, frame.width, frame.height)?.let { _frames.tryEmit(it) }
-                  val raw = frame.buffer.duplicate()
-                  latestRaw = RawFrame(ByteArray(raw.remaining()).also { raw.get(it) }, frame.width, frame.height)
                 }
               }
               sessionJobs += scope.launch {
@@ -539,7 +510,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
       it.copy(
           phase = LinkPhase.IDLE,
           motionAvailable = null,
-          modeControlsStatus = "Mode controls: glasses disconnected",
+          modeControlsStatus = "Controls: glasses disconnected",
       )
     }
   }

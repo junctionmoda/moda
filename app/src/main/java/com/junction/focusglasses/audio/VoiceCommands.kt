@@ -18,91 +18,33 @@ import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 import org.vosk.android.StorageService
 
-enum class VoiceCommand {
-  START_WORK,
-  START_COOKING,
-  START_MEETING,
-  PAUSE_MODE,
-  RESUME_MODE,
-  NEXT_MODE,
-  PREVIOUS_MODE,
-  END_WORK,
-  END_MODE,
-  YES,
-  NOT_YET,
-  /** Cooking: "what can I cook" / "what do you see". */
-  COOK_IDEA,
-  /** Cooking: "set a ten minute timer"; minutes come from [VoiceCommands.parseMinutes]. */
-  COOK_TIMER,
-  MEAL_DONE,
-}
+enum class VoiceCommand { START, PAUSE, RESUME, END, YES, NOT_YET }
 
-/**
- * Offline English voice commands (Vosk, small en-us model, phone microphone). The recognizer is
- * restricted to a short phrase list, so it only ever hears the commands below or "[unk]". It is
- * paused while our own TTS speaks so it does not hear itself.
- *
- * Phone mic on purpose: opening the glasses mic switches Bluetooth to the call profile, which
- * drops the music in the glasses to phone-call quality.
- */
+/** Offline, fixed-phrase controls. The phone mic avoids lowering the glasses audio profile. */
 class VoiceCommands(private val context: Context, private val scope: CoroutineScope, private val voice: Voice) {
   companion object {
-    private const val TAG = "FocusGlasses:Commands"
+    private const val TAG = "Moda:Commands"
     private const val SAMPLE_RATE = 16_000f
-    private val MODES = listOf("work", "cooking", "meeting")
-    private val NUMBERS =
-        mapOf(
-            "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5, "six" to 6, "seven" to 7, "eight" to 8,
-            "nine" to 9, "ten" to 10, "twelve" to 12, "fifteen" to 15, "twenty" to 20, "twenty five" to 25,
-            "thirty" to 30, "forty" to 40, "forty five" to 45, "sixty" to 60,
-        )
     private val PHRASES =
-        MODES.flatMap { m ->
-          listOf("$m mode", "start $m mode", "open $m mode", "switch to $m mode", "end $m mode", "stop $m mode", "exit $m mode")
-        } +
-            listOf(
-                "finish work mode", "end mode", "stop mode",
-                "pause mode", "resume mode", "next mode", "previous mode",
-                "yes", "yes please", "sure", "okay", "take a break", "yes take a break", "i need a break",
-                "no", "not yet", "no thanks", "not now", "keep going", "more time", "give me more time",
-                "i want to finish this", "i want to finish this part", "not yet i want to finish this part",
-                "what can i cook", "what can i make", "what do you see", "look at this",
-                "start a timer", "set a timer", "start timer",
-                "meal finished", "i finished eating", "i am done eating", "done eating",
-                "[unk]",
-            ) +
-            NUMBERS.keys.flatMap { n -> listOf("set a $n minute timer", "$n minute timer", "$n minutes") }
+        listOf(
+            "start focus", "start focus mode", "start work", "start work mode",
+            "end focus", "end focus mode", "end work", "end work mode", "stop focus", "stop work",
+            "pause", "pause focus", "pause work", "resume", "resume focus", "resume work", "continue",
+            "yes", "yes please", "sure", "okay", "take a break", "yes take a break", "i need a break",
+            "no", "not yet", "no thanks", "not now", "keep going", "more time", "give me more time",
+            "i want to finish this", "i want to finish this part", "not yet i want to finish this part", "[unk]",
+        )
 
-    /** Minutes named in a timer request ("set a ten minute timer"), or null. */
-    fun parseMinutes(text: String): Int? {
-      val t = " ${text.lowercase()} "
-      return NUMBERS.entries.sortedByDescending { it.key.length }.firstOrNull { " ${it.key} " in t }?.value
-          ?: Regex("""(\d+)""").find(t)?.groupValues?.get(1)?.toIntOrNull()
-    }
-
-    /** Maps a recognized utterance to a command; null for anything else. */
     fun parse(text: String): VoiceCommand? {
-      val t = " ${text.lowercase().trim()} "
-      if (t.isBlank()) return null
-      val t2 = t.replace(".", " ").replace(",", " ")
-      val mode = MODES.firstOrNull { "$it mode" in t2 }
-      val ending = listOf(" end ", " stop ", " finish ", " exit ", " close ", " quit ", " and ").any { it in t2 }
+      val phrase = " ${text.lowercase().replace(".", " ").replace(",", " ").trim()} "
+      if (phrase.isBlank()) return null
       return when {
-        // Glasses Speech often hears "end" as "and": "And cooking mode."
-        mode != null && ending -> if (mode == "work") VoiceCommand.END_WORK else VoiceCommand.END_MODE
-        mode == "work" -> VoiceCommand.START_WORK
-        mode == "cooking" -> VoiceCommand.START_COOKING
-        mode == "meeting" -> VoiceCommand.START_MEETING
-        "end mode" in t2 || "stop mode" in t2 -> VoiceCommand.END_MODE
-        "pause" in t2 -> VoiceCommand.PAUSE_MODE
-        "resume" in t2 || "continue" in t2 -> VoiceCommand.RESUME_MODE
-        "next mode" in t2 -> VoiceCommand.NEXT_MODE
-        "previous mode" in t2 -> VoiceCommand.PREVIOUS_MODE
-        " timer " in t2 -> VoiceCommand.COOK_TIMER
-        " cook " in t2 || "can i make" in t2 || "do you see" in t2 || "look at this" in t2 -> VoiceCommand.COOK_IDEA
-        "meal finished" in t2 || "done eating" in t2 || "finished eating" in t2 -> VoiceCommand.MEAL_DONE
-        " not " in t2 || " no " in t2 || " finish " in t2 || "more time" in t2 || "keep going" in t2 -> VoiceCommand.NOT_YET
-        " yes " in t2 || " sure " in t2 || " okay " in t2 || " break " in t2 -> VoiceCommand.YES
+        listOf(" end ", " stop ", " finish ", " exit ").any { it in phrase } -> VoiceCommand.END
+        "start" in phrase || "focus mode" in phrase || "work mode" in phrase -> VoiceCommand.START
+        "pause" in phrase -> VoiceCommand.PAUSE
+        "resume" in phrase || "continue" in phrase -> VoiceCommand.RESUME
+        " not " in phrase || " no " in phrase || "more time" in phrase || "keep going" in phrase -> VoiceCommand.NOT_YET
+        " yes " in phrase || " sure " in phrase || " okay " in phrase || " break " in phrase -> VoiceCommand.YES
         else -> null
       }
     }
@@ -110,120 +52,67 @@ class VoiceCommands(private val context: Context, private val scope: CoroutineSc
 
   private val _commands = MutableSharedFlow<VoiceCommand>(extraBufferCapacity = 4)
   val commands: SharedFlow<VoiceCommand> = _commands.asSharedFlow()
-
   private val _status = MutableStateFlow("Voice: off")
   val status: StateFlow<String> = _status.asStateFlow()
-
-  /** Last thing the recognizer heard (for the debug readout). */
   private val _heard = MutableStateFlow("")
   val heard: StateFlow<String> = _heard.asStateFlow()
-
   private var service: SpeechService? = null
   private var starting = false
   private var model: Model? = null
-  /** While suspended (Focus Live owns the microphone) the recognizer is released. */
-  private var suspended = false
   private var collectingSpeech = false
 
-  /** Loads the model and starts listening. Needs RECORD_AUDIO; safe to call more than once. */
   fun start() {
-    if (suspended || service != null || starting) return
-    model?.let {
-      onModel(it)
-      return
-    }
+    if (service != null || starting) return
+    model?.let { onModel(it); return }
     starting = true
     _status.value = "Voice: loading model…"
-    StorageService.unpack(
-        context,
-        "model-en-us",
-        "model",
-        { model: Model -> onModel(model) },
-        { e: java.io.IOException ->
-          starting = false
-          Log.e(TAG, "model unpack failed", e)
-          _status.value = "Voice: model missing (${e.message})"
-        },
-    )
-  }
-
-  /** Releases the microphone for Focus Live, or takes it back. */
-  fun setSuspended(value: Boolean) {
-    if (suspended == value) return
-    suspended = value
-    if (value) {
-      service?.let {
-        it.stop()
-        it.shutdown()
-      }
-      service = null
-      _status.value = "Voice: handled by Focus Live"
-      Log.i(TAG, "suspended")
-    } else {
-      start()
+    StorageService.unpack(context, "model-en-us", "model", ::onModel) { error ->
+      starting = false
+      Log.e(TAG, "model unpack failed", error)
+      _status.value = "Voice: model missing (${error.message})"
     }
   }
 
   private fun onModel(model: Model) {
     this.model = model
-    if (suspended) {
-      starting = false
-      return
-    }
     try {
       val grammar = PHRASES.joinToString(",", "[", "]") { "\"$it\"" }
-      val recognizer = Recognizer(model, SAMPLE_RATE, grammar)
-      val s = SpeechService(recognizer, SAMPLE_RATE)
-      s.startListening(listener)
-      service = s
+      service = SpeechService(Recognizer(model, SAMPLE_RATE, grammar), SAMPLE_RATE).also { it.startListening(listener) }
       _status.value = "Voice: listening"
-      Log.i(TAG, "listening")
-      // Don't listen to ourselves.
       if (!collectingSpeech) {
         collectingSpeech = true
         scope.launch {
           voice.speaking.collect { speaking ->
-            if (speaking) {
-              service?.setPause(true)
-            } else {
+            if (speaking) service?.setPause(true) else {
               delay(400)
               if (!voice.speaking.value) service?.setPause(false)
             }
           }
         }
       }
-    } catch (t: Throwable) {
-      Log.e(TAG, "could not start recognizer", t)
-      _status.value = "Voice: error (${t.message})"
+    } catch (error: Throwable) {
+      Log.e(TAG, "could not start recognizer", error)
+      _status.value = "Voice: error (${error.message})"
     } finally {
       starting = false
     }
   }
 
-  private val listener =
-      object : RecognitionListener {
-        override fun onPartialResult(hypothesis: String?) {}
+  private val listener = object : RecognitionListener {
+    override fun onPartialResult(hypothesis: String?) = Unit
+    override fun onResult(hypothesis: String?) = handle(hypothesis)
+    override fun onFinalResult(hypothesis: String?) = handle(hypothesis)
+    override fun onError(exception: Exception?) { _status.value = "Voice: error (${exception?.message})" }
+    override fun onTimeout() = Unit
+  }
 
-        override fun onResult(hypothesis: String?) = handle(hypothesis)
-
-        override fun onFinalResult(hypothesis: String?) = handle(hypothesis)
-
-        override fun onError(exception: Exception?) {
-          Log.e(TAG, "recognizer error", exception)
-          _status.value = "Voice: error (${exception?.message})"
-        }
-
-        override fun onTimeout() {}
-      }
-
-  /** Accepts a final transcript from either the phone recognizer or DAT glasses Speech. */
   fun submitFinalTranscript(text: String, source: String) {
     if (text.isBlank() || text == "[unk]") return
-    val cmd = parse(text.replace("[unk]", " "))
-    Log.i(TAG, "$source heard \"$text\" -> $cmd")
+    val command = parse(text.replace("[unk]", " "))
+    Log.i(TAG, "$source heard \"$text\" -> $command")
     scope.launch {
       _heard.value = text
-      cmd?.let { _commands.emit(it) }
+      command?.let { _commands.emit(it) }
     }
   }
 

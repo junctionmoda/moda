@@ -20,6 +20,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "FocusGlasses"
+rootProject.name = "ModaForRayBanMetaGen2"
 
 include(":app")

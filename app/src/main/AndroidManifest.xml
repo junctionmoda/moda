@@ -3,18 +3,16 @@
 
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Phone camera: only used by test mode (simulated glasses feed) -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-    <!-- Voice commands ("Start Work Mode", answering "Need a break?"), recognized offline -->
+    <!-- Offline focus controls use the phone microphone. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
-    <uses-permission android:name="android.permission.READ_CALENDAR" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -58,7 +56,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="focusglasses" />
+                <data android:scheme="moda" />
             </intent-filter>
         </activity>
 
@@ -67,8 +65,5 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice|microphone" />
 
-        <receiver
-            android:name=".cooking.CookingDishReminderReceiver"
-            android:exported="false" />
     </application>
 </manifest>
