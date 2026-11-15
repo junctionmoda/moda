@@ -6,7 +6,7 @@ Moda is a focused Android companion for Ray-Ban Meta Gen 2 glasses. It deliberat
 
 ## Project demo
 
-[Open the browser-only Moda demo](https://htmlpreview.github.io/?https://github.com/xingzhuonan-blip/moda/blob/main/demo/index.html). It simulates glasses connection, camera detection, posture, voice controls, and the full focus session in the browser—no phone app or glasses required.
+[Open the browser-only Moda demo](https://htmlpreview.github.io/?https://github.com/xingzhuonan-blip/moda/blob/main/demo/moda-project-demo.html). It simulates glasses connection, camera detection, posture, voice controls, and the full focus session in the browser—no phone app or glasses required.
 
 ## What it does
 
